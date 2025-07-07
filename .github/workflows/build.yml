@@ -1,0 +1,12 @@
+name: "build"
+
+on:
+  push:
+    branches: "**"
+    tags-ignore: ["**"]
+  pull_request:
+
+jobs:
+  call-build:
+    uses: "vectrix-space/.github/.github/workflows/shared-ci.yaml@main"
+    secrets: "inherit"
