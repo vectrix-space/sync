@@ -96,7 +96,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final int MAXIMUM_TRANSFER_THREADS = 16;
 
   /**
-   * Represents the minimum transfer stride using for transferring batches of
+   * Represents the minimum transfer stride for transferring batches of
    * nodes per thread.
    */
   /* package */ static final int MINIMUM_TRANSFER_STRIDE = 16;
@@ -112,14 +112,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final int NODE_MOVED = -1;
 
   /*
-   * Transfer states for bulk table operations.
+   * Lock states for bulk table updates.
    */
   /* package */ static final int TRANSFER_PROMOTE = -1;
   /* package */ static final int TRANSFER_RESIZE = 1;
   /* package */ static final int TRANSFER_AMEND = 2;
 
   /*
-   * Operation states for bulk table operations.
+   * Operation states for bulk table updates.
    */
   /* package */ static final int STATE_IDLE = 0;
   /* package */ static final int STATE_ACHIEVED = 1;
@@ -133,12 +133,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final int TRANSACTION_NEXT = 1;
 
   /**
-   * Represents a value for a value reference that has been expunged.
+   * Represents a sentinel for a value that has been expunged.
    */
   /* package */ static final Object VALUE_EXPUNGED = new Object();
 
   /**
-   * Represents a value for a value transaction that has not been commited.
+   * Represents a sentinel for a transaction value that has not been commited.
    */
   /* package */ static final Object VALUE_UNCOMMITED = new Object();
 
@@ -189,17 +189,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final VarHandle NODE_VALUE;
 
   /**
-   * Provides atomic operations for {@link SyncMap#stamp}.
+   * Provides atomic operations for {@link SyncMap#token}.
    */
-  /* package */ static final VarHandle OPERATION_STAMP;
+  /* package */ static final VarHandle OPERATION_TOKEN;
 
   /**
-   * Provides atomic operations for {@link OperationStamp#threads}.
+   * Provides atomic operations for {@link OperationToken#threads}.
    */
   /* package */ static final VarHandle OPERATION_THREADS;
 
   /**
-   * Provides atomic operations for {@link OperationStamp#state}.
+   * Provides atomic operations for {@link OperationToken#state}.
    */
   /* package */ static final VarHandle OPERATION_STATE;
 
@@ -219,9 +219,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
       NODE_ARRAY = MethodHandles.arrayElementVarHandle(Node[].class);
       NODE_VALUE = lookup.findVarHandle(ValueReference.class, "value", Object.class);
-      OPERATION_STAMP = lookup.findVarHandle(SyncMap.class, "stamp", OperationStamp.class);
-      OPERATION_THREADS = lookup.findVarHandle(OperationStamp.class, "threads", int.class);
-      OPERATION_STATE = lookup.findVarHandle(OperationStamp.class, "state", int.class);
+      OPERATION_TOKEN = lookup.findVarHandle(SyncMap.class, "token", OperationToken.class);
+      OPERATION_THREADS = lookup.findVarHandle(OperationToken.class, "threads", int.class);
+      OPERATION_STATE = lookup.findVarHandle(OperationToken.class, "state", int.class);
       TRANSFER_INDEX = lookup.findVarHandle(SyncMap.class, "transferIndex", int.class);
       TRANSFER_PROGRESS = lookup.findVarHandle(SyncMap.class, "transferProgress", int.class);
     } catch(final Exception exception) {
@@ -302,7 +302,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return SyncMap.NODE_VALUE.compareAndSet(reference, oldValue, newValue);
   }
 
-  /* --------------------------- < Value Common > --------------------------- */
+  /* ------------------------- < Value Functions > ------------------------- */
 
   /**
    * Returns the actual {@link V} value from the given {@link ValueReference},
@@ -488,11 +488,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   private transient volatile boolean amended;
 
   /**
-   * Represents the {@link OperationStamp} for the current operation if started,
+   * Represents the {@link OperationToken} for the current operation if started,
    * otherwise {@code null}.
    */
   @SuppressWarnings("FieldMayBeFinal")
-  private transient volatile @Nullable OperationStamp stamp = null;
+  private transient volatile @Nullable OperationToken token = null;
 
   /**
    * Represents the transfer index a thread may claim a range of when
@@ -1574,16 +1574,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * the mutable table and removes the mutable table.
    */
   /* package */ void promote() {
-    Node<K, V>[] source; OperationStamp stamp;
+    Node<K, V>[] source; OperationToken token;
 
     while(this.amended
       && (source = this.mutableTable) != null
       && source.length > 0) {
       // Attempt to acquire the promotion lock, or if the promotion lock has
       // already been retrieved, break.
-      if((stamp = this.createStamp(SyncMap.TRANSFER_PROMOTE)) != null) {
+      if((token = this.createToken(SyncMap.TRANSFER_PROMOTE)) != null) {
         if(!this.amended || source != this.mutableTable) {
-          this.resetStamp(stamp);
+          this.resetToken(token);
 
           Thread.onSpinWait();
           continue;
@@ -1595,9 +1595,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
         this.misses.reset();
 
-        this.resetStamp(stamp);
+        this.resetToken(token);
         break;
-      } else if(this.getStamp(SyncMap.TRANSFER_PROMOTE) != null) {
+      } else if(this.getToken(SyncMap.TRANSFER_PROMOTE) != null) {
         break;
       }
 
@@ -1624,7 +1624,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   @SuppressWarnings("unchecked")
   /* package */ void resize() {
-    Node<K, V>[] source, destination; OperationStamp stamp;
+    Node<K, V>[] source, destination; OperationToken token;
     int length;
 
     while(this.amended
@@ -1633,17 +1633,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       && (this.size.sum() * this.loadFactor) >= length) {
       // Attempt to acquire the resize lock, or if resize lock has already
       // been retrieved try join the operation.
-      if((stamp = this.createStamp(SyncMap.TRANSFER_RESIZE)) != null) {
+      if((token = this.createToken(SyncMap.TRANSFER_RESIZE)) != null) {
         // Re-check the tables exist, before we continue. If they have been
         // removed, reset and restart the operation.
         if(!this.amended || source != this.mutableTable) {
-          this.resetStamp(stamp);
+          this.resetToken(token);
           continue;
         }
 
         this.transferIndex = length;
         this.transferTable = destination = new Node[length << 1];
-      } else if((stamp = this.getStamp(SyncMap.TRANSFER_RESIZE)) == null) {
+      } else if((token = this.getToken(SyncMap.TRANSFER_RESIZE)) == null) {
         // If the current operation we're looking to participate with is not
         // running, break.
         break;
@@ -1655,7 +1655,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
       try {
         final boolean finalize;
-        if(this.joinStamp(stamp)) {
+        if(this.joinToken(token)) {
           try {
             // Check if the state has changed once we have joined the operation.
             // If it has, spin this back to the beginning of the loop.
@@ -1663,12 +1663,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               && source == this.mutableTable
               && destination == this.transferTable
               && this.transfer(source, destination, true) >= length) {
-              this.achieveStamp(stamp);
+              this.achieveToken(token);
             }
           } finally {
             // Complete this thread work for the operation and store whether
             // the task was completed.
-            finalize = this.completeStamp(stamp);
+            finalize = this.completeToken(token);
           }
         } else {
           // If we were not able to join this operation, stop trying.
@@ -1683,13 +1683,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           this.transferTable = null;
           this.mutableTable = destination;
 
-          this.finalizeStamp(stamp);
+          this.finalizeToken(token);
         }
 
         break;
       } finally {
-        if(this.shouldResetStamp(stamp)) {
-          this.resetStamp(stamp);
+        if(this.shouldResetToken(token)) {
+          this.resetToken(token);
         }
       }
     }
@@ -1701,7 +1701,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   @SuppressWarnings("unchecked")
   /* package */ void amend() {
-    Node<K, V>[] destination; OperationStamp stamp;
+    Node<K, V>[] destination; OperationToken token;
 
     while(!this.amended && this.mutableTable == null) {
       final Node<K, V>[] source = this.immutableTable;
@@ -1709,17 +1709,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
       // Attempt to acquire the amend lock, or if amend lock has already
       // been retrieved try join the operation.
-      if((stamp = this.createStamp(SyncMap.TRANSFER_AMEND)) != null) {
+      if((token = this.createToken(SyncMap.TRANSFER_AMEND)) != null) {
         // Re-check the tables exist, before we continue. If they have been
         // removed, reset and restart the operation.
         if(this.amended || source != this.immutableTable || this.mutableTable != null) {
-          this.resetStamp(stamp);
+          this.resetToken(token);
           continue;
         }
 
         this.transferIndex = length;
         this.transferTable = destination = new Node[length];
-      } else if((stamp = this.getStamp(SyncMap.TRANSFER_AMEND)) == null) {
+      } else if((token = this.getToken(SyncMap.TRANSFER_AMEND)) == null) {
         // If the current operation we're looking to participate with is not
         // running, break.
         break;
@@ -1731,7 +1731,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
       try {
         final boolean finalize;
-        if(this.joinStamp(stamp)) {
+        if(this.joinToken(token)) {
           try {
             // Check if the state has changed once we have joined the operation.
             // If it has, spin this back to the beginning of the loop.
@@ -1739,12 +1739,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               && source == this.immutableTable
               && destination == this.transferTable
               && this.transfer(source, destination, false) >= length) {
-              this.achieveStamp(stamp);
+              this.achieveToken(token);
             }
           } finally {
             // Complete this thread work for the operation and store whether
             // the task was completed.
-            finalize = this.completeStamp(stamp);
+            finalize = this.completeToken(token);
           }
         } else {
           // If we were not able to join this operation, stop trying.
@@ -1760,13 +1760,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           this.mutableTable = destination;
           this.amended = true;
 
-          this.finalizeStamp(stamp);
+          this.finalizeToken(token);
         }
 
         break;
       } finally {
-        if(this.shouldResetStamp(stamp)) {
-          this.resetStamp(stamp);
+        if(this.shouldResetToken(token)) {
+          this.resetToken(token);
         }
       }
     }
@@ -1776,9 +1776,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Assists in transferring nodes from the old table to the new table.
    */
   /* package */ void helpTransfer() {
-    if(this.getStamp(SyncMap.TRANSFER_RESIZE) != null) {
+    if(this.getToken(SyncMap.TRANSFER_RESIZE) != null) {
       this.resize();
-    } else if(this.getStamp(SyncMap.TRANSFER_AMEND) != null) {
+    } else if(this.getToken(SyncMap.TRANSFER_AMEND) != null) {
       this.amend();
     }
   }
@@ -1912,6 +1912,66 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return progress;
   }
 
+  /* ------------------------- < Value Reference > ------------------------- */
+
+  /**
+   * Represents a holder for a value that can be shared across nodes, usually
+   * when the node has been cloned.
+   *
+   * @param <T> the value type
+   */
+  @SuppressWarnings("FieldMayBeFinal")
+  /* package */ static final class ValueReference<T> {
+    private transient volatile Object value;
+
+    /* package */ ValueReference(final @Nullable T value) {
+      this.value = value;
+    }
+  }
+
+  /**
+   * Represents a transaction between a previous value and the next value.
+   *
+   * @param <V> the value type
+   */
+  /* package */ static final class ValueTransaction<V> {
+    /* package */ transient Object[] values;
+
+    /* package */ ValueTransaction(final int capacity) {
+      this.values = new Object[capacity];
+
+      this.reset();
+    }
+
+    /* package */ boolean commited() {
+      return this.values[SyncMap.TRANSACTION_NEXT] != SyncMap.VALUE_UNCOMMITED;
+    }
+
+    /* package */ boolean empty(final int index) {
+      return this.values[index] == null;
+    }
+
+    /* package */ boolean match(final int index, final @NotNull Predicate<Object> matcher) {
+      return matcher.test(this.values[index]);
+    }
+
+    @SuppressWarnings("unchecked")
+      /* package */ <T extends V> @Nullable T getActual(final int index) {
+      final Object value = this.values[index];
+      if(value == null || value == SyncMap.VALUE_UNCOMMITED || value == SyncMap.VALUE_EXPUNGED) return null;
+      return (T) value;
+    }
+
+    /* package */ @Nullable Object set(final int index, final @Nullable Object value) {
+      this.values[index] = value;
+      return value;
+    }
+
+    /* package */ void reset() {
+      Arrays.fill(this.values, SyncMap.VALUE_UNCOMMITED);
+    }
+  }
+
   /* ------------------------------ < Nodes > ------------------------------ */
 
   /**
@@ -1942,64 +2002,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       } while((node = node.next) != null);
 
       return null;
-    }
-  }
-
-  /**
-   * Represents a holder for a value that can be shared across nodes, usually
-   * when the node has been cloned.
-   *
-   * @param <T> the value type
-   */
-  @SuppressWarnings("FieldMayBeFinal")
-  /* package */ static final class ValueReference<T> {
-    private transient volatile Object value;
-
-    /* package */ ValueReference(final @Nullable T value) {
-      this.value = value;
-    }
-  }
-
-  /**
-   * Represents a transaction between a previous value and the next value.
-   *
-   * @param <V> the value type
-   */
-  /* package */ static final class ValueTransaction<V> {
-    /* package */ Object[] values;
-
-    /* package */ ValueTransaction(final int capacity) {
-      this.values = new Object[capacity];
-
-      this.reset();
-    }
-
-    /* package */ boolean commited() {
-      return this.values[SyncMap.TRANSACTION_NEXT] != SyncMap.VALUE_UNCOMMITED;
-    }
-
-    /* package */ boolean empty(final int index) {
-      return this.values[index] == null;
-    }
-
-    /* package */ boolean match(final int index, final @NotNull Predicate<Object> matcher) {
-      return matcher.test(this.values[index]);
-    }
-
-    @SuppressWarnings("unchecked")
-    /* package */ <T extends V> @Nullable T getActual(final int index) {
-      final Object value = this.values[index];
-      if(value == SyncMap.VALUE_UNCOMMITED || value == SyncMap.VALUE_EXPUNGED) return null;
-      return (T) value;
-    }
-
-    /* package */ @Nullable Object set(final int index, final @Nullable Object value) {
-      this.values[index] = value;
-      return value;
-    }
-
-    /* package */ void reset() {
-      Arrays.fill(this.values, SyncMap.VALUE_UNCOMMITED);
     }
   }
 
@@ -2046,21 +2048,21 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
   }
 
-  /* ---------------------------- < Operation > ---------------------------- */
+  /* ------------------------------ < Token > ------------------------------ */
 
   /**
-   * Returns a new {@link OperationStamp} if the operation was successfully
+   * Returns a new {@link OperationToken} if the operation was successfully
    * started, otherwise returns {@code null}.
    *
    * @param operation the operation
-   * @return a new stamp, otherwise a failed stamp
+   * @return a new token, otherwise null
    */
-  private @Nullable OperationStamp createStamp(final int operation) {
-    OperationStamp stamp;
+  private @Nullable OperationToken createToken(final int operation) {
+    OperationToken token;
     for(; ; ) {
-      if(this.stamp != null) return null;
-      if(SyncMap.OPERATION_STAMP.compareAndSet(this, null, stamp = new OperationStamp(operation))) {
-        return stamp;
+      if(SyncMap.OPERATION_TOKEN.getAcquire(this) != null) return null;
+      if(SyncMap.OPERATION_TOKEN.compareAndSet(this, null, token = new OperationToken(operation))) {
+        return token;
       }
 
       Thread.onSpinWait();
@@ -2068,17 +2070,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   /**
-   * Returns the current {@link OperationStamp} if it matches the given
+   * Returns the current {@link OperationToken} if it matches the given
    * {@code operation} code, otherwise returns {@code null}.
    *
    * @param operation the operation
-   * @return the current stamp, if valid, otherwise a failed stamp
+   * @return the current token, if valid, otherwise null
    */
-  private @Nullable OperationStamp getStamp(final int operation) {
-    final OperationStamp stamp;
-    if((stamp = ((OperationStamp) SyncMap.OPERATION_STAMP.getAcquire(this))) != null
-      && stamp.operation == operation) {
-      return stamp;
+  private @Nullable OperationToken getToken(final int operation) {
+    final OperationToken token;
+    if((token = ((OperationToken) SyncMap.OPERATION_TOKEN.getAcquire(this))) != null
+      && token.operation == operation) {
+      return token;
     }
 
     return null;
@@ -2088,14 +2090,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Returns {@code true} if the current {@link Thread} can successfully
    * participate in this operation, otherwise returns {@code false}.
    *
-   * @param stamp the operation stamp
+   * @param token the operation token
    * @return true if joined, otherwise false
    */
-  private boolean joinStamp(final @NotNull OperationStamp stamp) {
+  private boolean joinToken(final @NotNull OperationToken token) {
     for(; ; ) {
-      final int threads = stamp.threads;
-      if(this.invalidStamp(stamp) || stamp.state != SyncMap.STATE_IDLE || threads >= SyncMap.MAXIMUM_TRANSFER_THREADS) return false;
-      if(SyncMap.OPERATION_THREADS.compareAndSet(stamp, threads, threads + 1)) {
+      final int threads = token.threads;
+      if(this.invalidToken(token) || token.state != SyncMap.STATE_IDLE || threads >= SyncMap.MAXIMUM_TRANSFER_THREADS) return false;
+      if(SyncMap.OPERATION_THREADS.compareAndSet(token, threads, threads + 1)) {
         return true;
       }
 
@@ -2104,14 +2106,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   /**
-   * Marks the {@link OperationStamp} with the {@link SyncMap#STATE_ACHIEVED}.
+   * Marks the {@link OperationToken} with the {@link SyncMap#STATE_ACHIEVED}.
    *
-   * @param stamp the stamp
+   * @param token the token
    */
-  private void achieveStamp(final @NotNull OperationStamp stamp) {
+  private void achieveToken(final @NotNull OperationToken token) {
     for(; ; ) {
-      if(this.invalidStamp(stamp) || stamp.state != SyncMap.STATE_IDLE) return;
-      if(SyncMap.OPERATION_STATE.compareAndSet(stamp, SyncMap.STATE_IDLE, STATE_ACHIEVED)) {
+      if(this.invalidToken(token) || token.state != SyncMap.STATE_IDLE) return;
+      if(SyncMap.OPERATION_STATE.compareAndSet(token, SyncMap.STATE_IDLE, STATE_ACHIEVED)) {
         return;
       }
 
@@ -2123,14 +2125,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Returns {@code true} if the current {@link Thread} is able to complete the
    * operation, otherwise returns {@code false}.
    *
-   * @param stamp the stamp
+   * @param token the token
    * @return true if completed, otherwise false
    */
-  private boolean completeStamp(final @NotNull OperationStamp stamp) {
+  private boolean completeToken(final @NotNull OperationToken token) {
     int threads;
     for(; ; ) {
-      threads = stamp.threads;
-      if(SyncMap.OPERATION_THREADS.compareAndSet(stamp, threads, threads - 1)) {
+      threads = token.threads;
+      if(SyncMap.OPERATION_THREADS.compareAndSet(token, threads, threads - 1)) {
         threads--;
         break;
       }
@@ -2139,9 +2141,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     for(; ; ) {
-      final int state = stamp.state;
+      final int state = token.state;
       if(threads > 0 || state != SyncMap.STATE_ACHIEVED) return false;
-      if(SyncMap.OPERATION_STATE.compareAndSet(stamp, SyncMap.STATE_ACHIEVED, SyncMap.STATE_COMPLETED)) {
+      if(SyncMap.OPERATION_STATE.compareAndSet(token, SyncMap.STATE_ACHIEVED, SyncMap.STATE_COMPLETED)) {
         return true;
       }
 
@@ -2150,15 +2152,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   /**
-   * Marks the {@link OperationStamp} with the {@link SyncMap#STATE_FINALIZED}.
+   * Marks the {@link OperationToken} with the {@link SyncMap#STATE_FINALIZED}.
    *
-   * @param stamp the stamp
+   * @param token the token
    */
-  private void finalizeStamp(final @NotNull OperationStamp stamp) {
+  private void finalizeToken(final @NotNull OperationToken token) {
     for(; ; ) {
-      final int state = stamp.state;
-      if(this.invalidStamp(stamp) || state != SyncMap.STATE_COMPLETED) return;
-      if(SyncMap.OPERATION_STATE.compareAndSet(stamp, SyncMap.STATE_COMPLETED, SyncMap.STATE_FINALIZED)) {
+      final int state = token.state;
+      if(this.invalidToken(token) || state != SyncMap.STATE_COMPLETED) return;
+      if(SyncMap.OPERATION_STATE.compareAndSet(token, SyncMap.STATE_COMPLETED, SyncMap.STATE_FINALIZED)) {
         break;
       }
 
@@ -2167,47 +2169,47 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   /**
-   * Returns {@code true} if the stamp should be reset, otherwise {@code false}.
+   * Returns {@code true} if the token should be reset, otherwise {@code false}.
    *
-   * @param stamp the stamp
+   * @param token the token
    * @return true if it should be reset, otherwise false
    */
-  private boolean shouldResetStamp(final @NotNull OperationStamp stamp) {
-    return !this.invalidStamp(stamp)
-      && stamp.threads <= 0
-      && (stamp.state == SyncMap.STATE_FINALIZED || stamp.state == SyncMap.STATE_IDLE);
+  private boolean shouldResetToken(final @NotNull OperationToken token) {
+    return !this.invalidToken(token)
+      && token.threads <= 0
+      && (token.state == SyncMap.STATE_FINALIZED || token.state == SyncMap.STATE_IDLE);
   }
 
   /**
-   * Resets the current operation, if the given stamp is valid.
+   * Resets the current operation, if the given token is valid.
    *
-   * @param stamp the stamp
+   * @param token the token
    */
-  private void resetStamp(final @NotNull OperationStamp stamp) {
-    SyncMap.OPERATION_STAMP.compareAndSet(this, stamp, null);
+  private void resetToken(final @NotNull OperationToken token) {
+    SyncMap.OPERATION_TOKEN.compareAndSet(this, token, null);
   }
 
   /**
-   * Returns {@code true} if the given stamp is invalid, otherwise returns
+   * Returns {@code true} if the given token is invalid, otherwise returns
    * {@code false}.
    *
-   * @param stamp the stamp
-   * @return true if the stamp is invalid, otherwise false
+   * @param token the token
+   * @return true if the token is invalid, otherwise false
    */
-  private boolean invalidStamp(final @NotNull OperationStamp stamp) {
-    return ((OperationStamp) SyncMap.OPERATION_STAMP.getAcquire(this)) != stamp;
+  private boolean invalidToken(final @NotNull OperationToken token) {
+    return ((OperationToken) SyncMap.OPERATION_TOKEN.getAcquire(this)) != token;
   }
 
   /**
-   * Represents a unique object for an operation that has been started.
+   * Represents a unique token for an operation that has been started.
    */
-  /* package */ static final class OperationStamp {
+  /* package */ static final class OperationToken {
     /* package */ final int operation;
 
-    private int threads;
-    private int state;
+    private volatile int threads;
+    private volatile int state;
 
-    /* package */ OperationStamp(final int operation) {
+    /* package */ OperationToken(final int operation) {
       this.operation = operation;
     }
   }
