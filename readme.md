@@ -1,4 +1,17 @@
-# Sync
+<div align="center">
+  <h1>Sync</h1>
+  <br/>
+</div>
+
+<div align="center">
+
+![Build Status](https://github.com/vectrix-space/sync/actions/workflows/build.yml/badge.svg)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue)](license.txt)
+[![Discord](https://img.shields.io/discord/819522977586348052)](https://discord.gg/rYpaxPFQrj)
+
+</div>
+
+> This project is experimental and not considered stable for production yet.
 
 Provides thread-safe utilities for highly concurrent scenarios in Java.
 
