@@ -751,7 +751,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             // completing the transfer.
             this.helpTransfer();
           } else {
-            synchronized(node.lock) {
+            synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
                 for(; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -824,7 +824,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       // Only proceed here if the node did not exist in the immutable table.
       final int index;
       if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
-        synchronized(node.lock) {
+        synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -967,7 +967,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             // completion the transfer.
             this.helpTransfer();
           } else {
-            synchronized(node.lock) {
+            synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
                 for(Node<K, V> previousNode = null; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1091,7 +1091,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             // completing the transfer.
             this.helpTransfer();
           } else {
-            synchronized(node.lock) {
+            synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
                 for(; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1189,7 +1189,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             // completing the transfer.
             this.helpTransfer();
           } else {
-            synchronized(node.lock) {
+            synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
                 for(; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1242,7 +1242,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         } else if(node.hash == SyncMap.NODE_MOVED) {
           this.helpTransfer();
         } else {
-          synchronized(node.lock) {
+          synchronized(node) {
             if(SyncMap.getNode(table, index) == node) {
               for(; ; ) {
                 if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1291,7 +1291,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       // Only proceed here if the node did not exist in the immutable table.
       final int index;
       if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
-        synchronized(node.lock) {
+        synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1360,7 +1360,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       // Only proceed here if the node did not exist in the immutable table.
       final int index;
       if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
-        synchronized(node.lock) {
+        synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1425,7 +1425,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       // Only proceed here if the node did not exist in the immutable table.
       final int index;
       if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
-        synchronized(node.lock) {
+        synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1477,7 +1477,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       // Only proceed here if the node did not exist in the immutable table.
       final int index;
       if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
-        synchronized(node.lock) {
+        synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
@@ -1836,7 +1836,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         } else if(node.hash == SyncMap.NODE_MOVED) {
           advance = true;
         } else {
-          synchronized(node.lock) {
+          synchronized(node) {
             if(SyncMap.getNode(source, i) == node) {
               Node<K, V> loHead = null, loTail = null;
               Node<K, V> hiHead = null, hiTail = null;
@@ -1987,7 +1987,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <V> the value type
    */
   /* package */ static class Node<K, V> {
-    /* package */ final Object lock = new Object();
     /* package */ final int hash;
     /* package */ final K key;
     /* package */ volatile ValueReference<V> reference;
