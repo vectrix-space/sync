@@ -630,10 +630,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   /* package */ final @Nullable ValueReference<V> getImmutableValue(final int hash, final @NotNull K key) {
     final Node<K, V>[] table = this.immutableTable;
-    final int length = table.length;
 
     Node<K, V> node; K nodeKey;
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+    if((node = SyncMap.getNode(table, (table.length - 1) & hash)) != null) {
       do {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
           return node.reference;
@@ -646,25 +645,21 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   /* package */ final @Nullable ValueReference<V> getMutableValue(final int hash, final @NotNull K key) {
     final Node<K, V>[] table = this.mutableTable;
-    if(table != null) {
-      final int length = table.length;
+    Node<K, V> node;
+    final int nodeHash; K nodeKey;
 
-      Node<K, V> node;
-      final int nodeHash; K nodeKey;
-
-      if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
-        if((nodeHash = node.hash) == hash) {
-          if((nodeKey = node.key) == key || nodeKey.equals(key)) {
-            return node.reference;
-          }
-        } else if(nodeHash < 0) {
-          return (node = node.find(hash, key)) != null ? node.reference : null;
+    if(table != null && (node = SyncMap.getNode(table, (table.length - 1) & hash)) != null) {
+      if((nodeHash = node.hash) == hash) {
+        if((nodeKey = node.key) == key || nodeKey.equals(key)) {
+          return node.reference;
         }
+      } else if(nodeHash < 0) {
+        return (node = node.find(hash, key)) != null ? node.reference : null;
+      }
 
-        while((node = node.next) != null) {
-          if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
-            return node.reference;
-          }
+      while((node = node.next) != null) {
+        if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+          return node.reference;
         }
       }
     }
@@ -1597,8 +1592,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       } else if(this.getToken(SyncMap.TRANSFER_PROMOTE) != null) {
         break;
       }
-
-      Thread.onSpinWait();
     }
   }
 
