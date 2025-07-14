@@ -33,13 +33,12 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
-import java.util.function.BiPredicate;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -48,7 +47,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Represents a hash table capable of highly concurrent retrievals and updates.
- * It works similarly to {@link java.util.concurrent.ConcurrentHashMap} and
+ * It works similarly to {@link ConcurrentHashMap} and
  * shares many of the same concepts. However, the main difference is with how
  * this map carefully manages two separate tables. One table is immutable
  * providing efficient retrieval and updates of existing and frequently
@@ -58,7 +57,7 @@ import static java.util.Objects.requireNonNull;
  * <p>This map is optimized for cases where updates and retrievals for existing
  * entries is a lot faster than recently added entries. However, the
  * performance in other cases are close or equal to that of {@link
- * java.util.concurrent.ConcurrentHashMap} which is faster than a traditional
+ * ConcurrentHashMap} which is faster than a traditional
  * map paired with a read and write lock, or maps with an exclusive lock (such
  * as using {@link Collections#synchronizedMap(Map)}) in high concurrency
  * scenarios.</p>
@@ -126,22 +125,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final int STATE_ACHIEVED = 1;
   /* package */ static final int STATE_COMPLETED = 2;
   /* package */ static final int STATE_FINALIZED = 3;
-
-  /*
-   * Value transaction indexes.
-   */
-  /* package */ static final int TRANSACTION_PREVIOUS = 0;
-  /* package */ static final int TRANSACTION_NEXT = 1;
-
-  /**
-   * Represents a sentinel for a value that has been expunged.
-   */
-  /* package */ static final Object VALUE_EXPUNGED = new Object();
-
-  /**
-   * Represents a sentinel for a transaction value that has not been commited.
-   */
-  /* package */ static final Object VALUE_UNCOMMITED = new Object();
 
   /**
    * Represents the maximum number of processors for transfer size limits.
@@ -275,189 +258,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     SyncMap.NODE_ARRAY.setRelease(table, index, node);
   }
 
-  /* ---------------------------- < Value Base > ---------------------------- */
-
-  /**
-   * Returns the {@link Object} value from the given {@link ValueReference},
-   * if present, otherwise {@code null}.
-   *
-   * @param reference the reference
-   * @param <V> the value type
-   * @return the value, or null
-   */
-  /* package */ static <V> @Nullable Object getValue(final @NotNull ValueReference<V> reference) {
-    return SyncMap.NODE_VALUE.getAcquire(reference);
-  }
-
-  /**
-   * Atomically compare and swaps the {@link Object} value from the {@code oldValue}
-   * to the {@code newValue}.
-   *
-   * @param reference the reference
-   * @param oldValue the old value to compare
-   * @param newValue the new value
-   * @param <V> the value type
-   * @return true if new value was set, otherwise false
-   */
-  /* package */ static <V> boolean replaceValue(final @NotNull ValueReference<V> reference, final @Nullable Object oldValue, final @Nullable Object newValue) {
-    return SyncMap.NODE_VALUE.compareAndSet(reference, oldValue, newValue);
-  }
-
-  /* ------------------------- < Value Functions > ------------------------- */
-
-  /**
-   * Returns the actual {@link V} value from the given {@link ValueReference},
-   * if present, otherwise {@code null}.
-   *
-   * @param reference the reference
-   * @param <V> the value type
-   * @return the actual value
-   */
-  @SuppressWarnings("unchecked")
-  /* package */ static <V> @Nullable V getActualValue(final @NotNull ValueReference<V> reference) {
-    final Object value = SyncMap.getValue(reference);
-    return value == SyncMap.VALUE_EXPUNGED ? null : (V) value;
-  }
-
-  /**
-   * Atomically sets the value.
-   *
-   * @param transaction the transaction
-   * @param reference   the reference
-   * @param value       the value
-   * @param <V>         the value type
-   */
-  /* package */ static <V> void transactValue(
-      final @NotNull ValueTransaction<V> transaction,
-      final @NotNull ValueReference<V> reference,
-      final @Nullable Object value
-  ) {
-    transaction.reset();
-
-    Object previous;
-    for(; ; ) {
-      transaction.setPrevious(previous = SyncMap.getValue(reference));
-      if(SyncMap.replaceValue(reference, previous, value)) {
-        transaction.setNext(value);
-        return;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Atomically sets the value if it matches the {@link BiPredicate} filter
-   * and returns the updated {@link ValueTransaction}.
-   *
-   * @param transaction the transaction
-   * @param reference the reference
-   * @param value the value
-   * @param transactionFilter the transaction filter
-   * @param <V> the value type
-   * @return the transaction
-   */
-  /* package */ static <V> @NotNull ValueTransaction<V> transactValue(
-      final @NotNull ValueTransaction<V> transaction,
-      final @NotNull ValueReference<V> reference,
-      final @Nullable Object value,
-      final @NotNull BiPredicate<@Nullable Object, @Nullable Object> transactionFilter
-  ) {
-    transaction.reset();
-
-    Object previous;
-    for(; ; ) {
-      if(!transactionFilter.test(transaction.setPrevious(previous = SyncMap.getValue(reference)), value)) return transaction;
-      if(SyncMap.replaceValue(reference, previous, value)) {
-        transaction.setNext(value);
-        return transaction;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Atomically computes and sets the value and returns the updated
-   * {@link ValueTransaction}.
-   *
-   * @param transaction the transaction
-   * @param reference the reference
-   * @param valueMapper the value mapper
-   * @param <V> the value type
-   * @return the transaction
-   */
-  /* package */ static <V> @NotNull ValueTransaction<V> transactComputeValue(
-      final @NotNull ValueTransaction<V> transaction,
-      final @NotNull ValueReference<V> reference,
-      final @NotNull Function<@NotNull ValueTransaction<V>, @Nullable Object> valueMapper
-  ) {
-    transaction.reset();
-
-    Object previous, next;
-    for(; ; ) {
-      transaction.setPrevious(previous = SyncMap.getValue(reference));
-      if(SyncMap.replaceValue(reference, previous, next = valueMapper.apply(transaction))) {
-        transaction.setNext(next);
-        return transaction;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Atomically computes and sets the value if it matches the {@link BiPredicate}
-   * filter and returns the updated {@link ValueTransaction}.
-   *
-   * @param transaction the transaction
-   * @param reference the reference
-   * @param valueMapper the value mapper
-   * @param transactionFilter the transaction filter
-   * @param <V> the value type
-   * @return the transaction
-   */
-  /* package */ static <V> @NotNull ValueTransaction<V> transactComputeValue(
-      final @NotNull ValueTransaction<V> transaction,
-      final @NotNull ValueReference<V> reference,
-      final @NotNull Function<@NotNull ValueTransaction<V>, @Nullable Object> valueMapper,
-      final @NotNull BiPredicate<@Nullable Object, @Nullable Object> transactionFilter
-  ) {
-    transaction.reset();
-
-    Object previous, next;
-    for(; ; ) {
-      transaction.setPrevious(previous = SyncMap.getValue(reference));
-      if(!transactionFilter.test(previous, next = valueMapper.apply(transaction))) return transaction;
-      if(SyncMap.replaceValue(reference, previous, next)) {
-        transaction.setNext(next);
-        return transaction;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Atomically clears the value and returns {@code true} if it was successful,
-   * otherwise {@code false}.
-   *
-   * @param reference the reference
-   * @param <V> the value type
-   * @return true if the value was cleared, otherwise false
-   */
-  /* package */ static <V> boolean clearValue(final @NotNull ValueReference<V> reference) {
-    Object previous;
-    for(; ; ) {
-      if((previous = SyncMap.getValue(reference)) == SyncMap.VALUE_EXPUNGED || previous == null) return false;
-      if(SyncMap.replaceValue(reference, previous, null)) {
-        return true;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
   /* ------------------------------ < Fields > ------------------------------ */
 
   /**
@@ -554,7 +354,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param loadFactor the load factor
    * @since 1.0.0
    */
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({"rawtypes", "unchecked"})
   public SyncMap(final int initialCapacity, final float loadFactor) {
     final int capacity = initialCapacity >= SyncMap.MAXIMUM_CAPACITY
       ? SyncMap.MAXIMUM_CAPACITY
@@ -585,7 +385,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = SyncMap.spread(key.hashCode());
 
     final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) != null && SyncMap.getActualValue(reference) != null;
+    return (reference = this.getValue(hash, key)) != null && Sentinel.exists(Atomics.get(SyncMap.NODE_VALUE, reference));
   }
 
   @Override
@@ -595,7 +395,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = SyncMap.spread(key.hashCode());
 
     final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) != null ? SyncMap.getActualValue(reference) : null;
+    return (reference = this.getValue(hash, key)) != null ? Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, reference)) : null;
   }
 
   @Override
@@ -608,7 +408,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final ValueReference<V> reference; final V next;
     return (reference = this.getValue(hash, key)) == null
       ? defaultValue
-      : ((next = SyncMap.getActualValue(reference)) == null ? defaultValue : next);
+      : ((next = Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, reference))) == null ? defaultValue : next);
   }
 
   @SuppressWarnings("unchecked")
@@ -669,25 +469,24 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public V computeIfAbsent(final @NotNull K key, final @NotNull Function<? super @NotNull K, ? extends @Nullable V> mappingFunction) {
+  public @Nullable V computeIfAbsent(final @NotNull K key, final @NotNull Function<? super @NotNull K, ? extends @Nullable V> mappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(mappingFunction, "mappingFunction");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Object value = SyncMap.VALUE_UNCOMMITED;
-
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node; final V result;
+    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry(); Object value = Sentinel.EMPTY; Object result;
     int length = table.length, index; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
         && (node = node.find(hash, key)) != null
-        && SyncMap.transactValue(transaction, node.reference, (value = mappingFunction.apply(key)), (previousValue, ignored) -> previousValue == null).commited()) {
+        && (entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG, (value = mappingFunction.apply(key)))).commited()) {
       // If the new value got committed (if it was null), and the new value is
       // not null, then increment the count.
-      if(transaction.matchNext(Objects::nonNull)) count = 1L;
-    } else if(transaction.matchPrevious(previousValue -> previousValue == null || previousValue == SyncMap.VALUE_EXPUNGED || previousValue == SyncMap.VALUE_UNCOMMITED)) {
+      if(value != null) count = 1L;
+      result = value;
+    } else if(!Sentinel.exists(result = entry.previous)) {
       // Only proceed here if the previous value was null, expunged or
       // uncommitted.
       retry: for(; ; ) {
@@ -697,25 +496,28 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
           do {
             if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(SyncMap.transactValue(transaction, node.reference, value != SyncMap.VALUE_UNCOMMITED ? value : (value = mappingFunction.apply(key)), (previousValue, ignored) -> previousValue == SyncMap.VALUE_EXPUNGED).commited()) {
+              if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EXPUNGED_FLAG, value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key))).commited()) {
                 // If the next value is not null, attempt to unexpunge the
                 // value and set the new value. Then add the node back to
                 // the mutable table and increment the count.
-                if(transaction.matchNext(Objects::nonNull)) {
+                if(value != null) {
                   this.amendNode(hash, key, node.reference);
 
                   count = 1L;
                 }
 
+                result = value;
                 break retry;
-              } else if(SyncMap.transactValue(transaction, node.reference, value != SyncMap.VALUE_UNCOMMITED ? value : (value = mappingFunction.apply(key)), (previousValue, ignored) -> previousValue == null).commited()) {
+              } else if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG, value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key)))).commited()) {
                 // If the value was null and the next value is not null,
                 // increment the count.
-                if(transaction.matchNext(Objects::nonNull)) count = 1L;
+                if(value != null) count = 1L;
 
+                result = value;
                 break retry;
-              } else if(transaction.matchPrevious(previousValue -> previousValue != null && previousValue != SyncMap.VALUE_EXPUNGED)) {
+              } else if(Sentinel.exists(entry.next)) {
                 // If the value was present and not expunged, return.
+                result = entry.previous;
                 break retry;
               }
 
@@ -729,16 +531,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         } else {
           if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
             // Compute and check if the value is not null, if not then break.
-            if((value != SyncMap.VALUE_UNCOMMITED ? value : (value = mappingFunction.apply(key))) == null) {
+            if((value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key))) == null) {
+              result = null;
               break;
             }
 
             // Try insert a new node if it hasn't previously existed, then
             // increment the count.
             if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>((V) value)))) {
-              transaction.setPrevious(null);
-              transaction.setNext(value);
               count = 1L;
+              result = value;
               break;
             }
           } else if(node.hash == SyncMap.NODE_MOVED) {
@@ -750,12 +552,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               if(SyncMap.getNode(table, index) == node) {
                 for(; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    if(SyncMap.transactValue(transaction, node.reference, value != SyncMap.VALUE_UNCOMMITED ? value : mappingFunction.apply(key), (previousValue, ignored) -> previousValue == null || previousValue == SyncMap.VALUE_EXPUNGED).commited()) {
+                    if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG | Atomics.EXPUNGED_FLAG, value != Sentinel.EMPTY ? value : mappingFunction.apply(key))).commited()) {
                       // If the value was null or expunged and the next value
                       // is not null, increment the count.
-                      if(transaction.matchNext(Objects::nonNull)) count = 1L;
+                      if(value != null) count = 1L;
+                      result = value;
+                      break retry;
                     }
 
+                    result = entry.previous;
                     break retry;
                   }
 
@@ -763,17 +568,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if((node = node.next) == null) {
                     // Compute and check if the value is not null, if not then
                     // break.
-                    if((value != SyncMap.VALUE_UNCOMMITED ? value : (value = mappingFunction.apply(key))) == null) {
+                    if((value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key))) == null) {
+                      result = null;
                       break retry;
                     }
 
                     // If the node does not exist in this bucket, create a new
                     // node and increment the count.
                     previousNode.next = new Node<>(hash, key, new ValueReference<>((V) value));
-
-                    transaction.setPrevious(null);
-                    transaction.setNext(value);
                     count = 1L;
+                    result = value;
                     break retry;
                   }
                 }
@@ -787,28 +591,23 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count > 0L) this.addCount(count);
-    return (result = transaction.getActualPrevious()) != null ? result : transaction.getActualNext();
+    return Sentinel.unbox(result);
   }
 
   @Override
-  public V computeIfPresent(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
+  public @Nullable V computeIfPresent(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
     final int hash = SyncMap.spread(key.hashCode());
 
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry();
     int length = table.length; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
       // Try update the node with the new value, only if it is present.
-      if(SyncMap.transactComputeValue(
-          transaction,
-          node.reference,
-          that -> remappingFunction.apply(key, that.getActualPrevious()),
-          (previousValue, ignored) -> previousValue != null && previousValue != SyncMap.VALUE_EXPUNGED
-      ).commited() && transaction.matchNext(Objects::isNull)) {
+      if((entry = Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.PRESENT_FLAG, that -> remappingFunction.apply(key, Sentinel.unbox(that)))).commited() && entry.next == null) {
         // If the new value got committed (if it was present and not expunged),
         // and the new value is null, then decrement the count.
         count = -1L;
@@ -823,12 +622,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                if(SyncMap.transactComputeValue(
-                    transaction,
-                    node.reference,
-                    that -> remappingFunction.apply(key, that.getActualPrevious()),
-                    (previousValue, ignored) -> previousValue != null
-                ).commited() && transaction.matchNext(Objects::isNull)) {
+                if((entry = Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.PRESENT_FLAG, that -> remappingFunction.apply(key, Sentinel.unbox(that)))).commited() && entry.next == null) {
                   // If the value was present or expunged and the next value
                   // is null, remove the node and decrement the count.
                   if(previousNode != null) {
@@ -838,7 +632,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
 
                   count = -1L;
-                  break;
                 }
 
                 break;
@@ -856,40 +649,35 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count != 0L) this.addCount(count);
-    return transaction.getActualNext();
+    return Sentinel.unbox(entry.next);
   }
 
   @Override
   @SuppressWarnings("unchecked")
-  public V compute(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
+  public @Nullable V compute(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Object value = SyncMap.VALUE_UNCOMMITED;
-
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry(); Object value = Sentinel.EMPTY; final Object result;
     int length = table.length, index; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
         && (node = node.find(hash, key)) != null
-        && SyncMap.transactComputeValue(
-            transaction,
-            node.reference,
-            that -> remappingFunction.apply(key, that.getActualPrevious()),
-            (previousValue, ignored) -> previousValue != SyncMap.VALUE_EXPUNGED
-        ).commited()
+        && (entry = Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG | Atomics.PRESENT_FLAG, that -> remappingFunction.apply(key, Sentinel.unbox(that)))).commited()
     ) {
       // If the value was null and the new value is not null, then increment
       // the count. If the value was not null and the new value is null, then
       // decrement the count.
-      if(transaction.matchPrevious(Objects::isNull) && transaction.matchNext(Objects::nonNull)) {
+      if(entry.previous == null && entry.next != null) {
         count = 1L;
-      } else if(transaction.matchPrevious(Objects::nonNull) && transaction.matchNext(Objects::isNull)) {
+      } else if(entry.previous != null && entry.next == null) {
         count = -1L;
       }
+
+      result = entry.next;
     } else {
       // Only proceed here if the previous value was expunged or uncommitted.
       retry: for(; ; ) {
@@ -899,39 +687,29 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
           do {
             if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(SyncMap.transactComputeValue(
-                  transaction,
-                  node.reference,
-                  that -> remappingFunction.apply(key, that.getActualPrevious()),
-                  (previousValue, nextValue) -> previousValue == SyncMap.VALUE_EXPUNGED
-              ).commited()) {
+              if((entry = Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EXPUNGED_FLAG, that -> remappingFunction.apply(key, Sentinel.unbox(that)))).commited()) {
                 // Attempt to unexpunge the value and set the new value. If the
                 // next value was not null, increment the count. If the next
                 // value was null, decrement the count.
-                if(transaction.matchNext(Objects::nonNull)) {
+                if(entry.next != null) {
                   this.amendNode(hash, key, node.reference);
 
                   count = 1L;
-                } else {
-                  count = -1L;
                 }
 
+                result = entry.next;
                 break retry;
-              } else if(SyncMap.transactComputeValue(
-                  transaction,
-                  node.reference,
-                  that -> remappingFunction.apply(key, that.getActualPrevious()),
-                  (previousValue, ignored) -> previousValue != SyncMap.VALUE_EXPUNGED
-              ).commited()) {
+              } else if((entry = Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG | Atomics.PRESENT_FLAG, that -> remappingFunction.apply(key, Sentinel.unbox(that)))).commited()) {
                 // If the value was not expunged then set the new value. If the
                 // next value was not null, increment the count. If the next
                 // value was null, decrement the count.
-                if(transaction.matchNext(Objects::nonNull)) {
+                if(entry.previous == null && entry.next != null) {
                   count = 1L;
-                } else {
+                } else if(entry.previous != null && entry.next == null) {
                   count = -1L;
                 }
 
+                result = entry.next;
                 break retry;
               }
 
@@ -945,16 +723,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         } else {
           if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
             // Compute and check if the value is not null, if not then break.
-            if((value != SyncMap.VALUE_UNCOMMITED ? value : (value = remappingFunction.apply(key, null))) == null) {
+            if((value != Sentinel.EMPTY ? value : (value = remappingFunction.apply(key, null))) == null) {
+              result = null;
               break;
             }
 
             // Try insert a new node if it hasn't previously existed, then
             // increment the count.
             if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>((V) value)))) {
-              transaction.setPrevious(null);
-              transaction.setNext(value);
               count = 1L;
+              result = value;
               break;
             }
           } else if(node.hash == SyncMap.NODE_MOVED) {
@@ -966,18 +744,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               if(SyncMap.getNode(table, index) == node) {
                 for(Node<K, V> previousNode = null; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    if(SyncMap.transactComputeValue(
-                        transaction,
-                        node.reference,
-                        that -> remappingFunction.apply(key, that.getActualPrevious())
-                    ).commited()) {
+                    if((entry = Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, that -> remappingFunction.apply(key, Sentinel.unbox(that)))).commited()) {
                       // If the value was null or expunged and the next value
                       // and the next value is not null, increment the count.
                       // If value was not null and the next value was null,
                       // decrement the count.
-                      if(transaction.matchPrevious(previousValue -> previousValue == null || previousValue == SyncMap.VALUE_EXPUNGED) && transaction.matchNext(Objects::nonNull)) {
+                      if(!Sentinel.exists(entry.previous) && entry.next != null) {
                         count = 1L;
-                      } else if(transaction.matchPrevious(previousValue -> previousValue != null && previousValue != SyncMap.VALUE_EXPUNGED) && transaction.matchNext(Objects::isNull)) {
+                      } else if(Sentinel.exists(entry.previous) && entry.next == null) {
                         if(previousNode != null) {
                           previousNode.next = node.next;
                         } else {
@@ -985,18 +759,22 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                         }
 
                         count = -1L;
-                        break;
                       }
+
+                      result = entry.next;
+                      break retry;
                     }
 
+                    result = entry.previous;
                     break retry;
                   }
 
                   previousNode = node;
                   if((node = node.next) == null) {
-                    if((value != SyncMap.VALUE_UNCOMMITED ? value : (value = remappingFunction.apply(key, null))) == null) {
+                    if((value != Sentinel.EMPTY ? value : (value = remappingFunction.apply(key, null))) == null) {
                       // Compute and check if the value is not null, if not
                       // then break.
+                      result = null;
                       break retry;
                     }
 
@@ -1004,9 +782,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     // node and increment the count.
                     previousNode.next = new Node<>(hash, key, new ValueReference<>((V) value));
 
-                    transaction.setPrevious(null);
-                    transaction.setNext(value);
                     count = 1L;
+                    result = value;
                     break retry;
                   }
                 }
@@ -1020,27 +797,28 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count != 0L) this.addCount(count);
-    return transaction.getActualNext();
+    return Sentinel.unbox(result);
   }
 
   @Override
-  public V putIfAbsent(final @NotNull K key, final @NotNull V value) {
+  public @Nullable V putIfAbsent(final @NotNull K key, final @NotNull V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
     final int hash = SyncMap.spread(key.hashCode());
 
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry(); Object result;
     int length = table.length, index; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
         && (node = node.find(hash, key)) != null
-        && SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue == null).commited()) {
+        && (entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG, value)).commited()) {
       // If the new value got committed (if it was null), then increment
       // the count.
       count = 1L;
-    } else {
+      result = null;
+    } else if(!Sentinel.exists(result = entry.previous)) {
       retry: for(; ; ) {
         table = this.immutableTable;
         length = table.length;
@@ -1048,20 +826,23 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
           do {
             if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue == SyncMap.VALUE_EXPUNGED).commited()) {
+              if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EXPUNGED_FLAG, value)).commited()) {
                 // Attempt to unexpunge the value and set the new value. If the
                 // new value was committed, then add the node back to the
                 // mutable table and increment the count.
                 this.amendNode(hash, key, node.reference);
 
                 count = 1L;
+                result = null;
                 break retry;
-              } else if(SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue == null).commited()) {
+              } else if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG, value)).commited()) {
                 // If the value was null, increment the count.
                 count = 1L;
+                result = null;
                 break retry;
-              } else if(transaction.matchPrevious(previousValue -> previousValue != null && previousValue != SyncMap.VALUE_EXPUNGED)) {
+              } else if(Sentinel.exists(entry.previous)) {
                 // If the value was present and not expunged, return.
+                result = entry.previous;
                 break retry;
               }
 
@@ -1077,8 +858,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             // Try insert a new node if it hasn't previously existed, then
             // increment the count.
             if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>(value)))) {
-              transaction.setPrevious(null);
               count = 1L;
+              result = null;
               break;
             }
           } else if(node.hash == SyncMap.NODE_MOVED) {
@@ -1092,10 +873,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
                     // If the new value got committed (if it was null or
                     // expunged), then increment the count.
-                    if(SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue == null || previousValue == SyncMap.VALUE_EXPUNGED).commited()) {
+                    if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG | Atomics.EXPUNGED_FLAG, value)).commited()) {
                       count = 1L;
                     }
 
+                    result = entry.previous;
                     break retry;
                   }
 
@@ -1105,8 +887,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     // node and increment the count.
                     previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
 
-                    transaction.setPrevious(null);
                     count = 1L;
+                    result = null;
                     break retry;
                   }
                 }
@@ -1120,7 +902,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count > 0L) this.addCount(count);
-    return transaction.getActualPrevious();
+    return Sentinel.unbox(result);
   }
 
   @Override
@@ -1131,15 +913,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = SyncMap.spread(key.hashCode());
 
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry(); final Object result;
     int length = table.length, index; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
       && (node = node.find(hash, key)) != null
-      && SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue != SyncMap.VALUE_EXPUNGED).commited()) {
+      && (entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG | Atomics.PRESENT_FLAG, value)).commited()) {
       // If the new value got committed (if it was not expunged), then see if
       // the previous value was null to increase the count.
-      if(transaction.matchPrevious(Objects::isNull)) count = 1L;
+      if(!Sentinel.exists(entry.previous)) count = 1L;
+      result = entry.previous;
     } else {
       retry: for(; ; ) {
         table = this.immutableTable;
@@ -1148,18 +931,21 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
           do {
             if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue == SyncMap.VALUE_EXPUNGED).commited()) {
+              if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EXPUNGED_FLAG, value)).commited()) {
                 // Attempt to unexpunge the value and set the new value. If the
                 // new value was committed, then add the node back to the
                 // mutable table and increment the count.
                 this.amendNode(hash, key, node.reference);
 
                 count = 1L;
+                result = entry.previous;
                 break retry;
-              } else if(SyncMap.transactValue(transaction, node.reference, value, (previousValue, ignored) -> previousValue != SyncMap.VALUE_EXPUNGED).commited()) {
+              } else if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.EMPTY_FLAG | Atomics.PRESENT_FLAG, value)).commited()) {
                 // If the value was not expunged and the previous value was
                 // null, increment the count.
-                if(transaction.matchPrevious(Objects::isNull)) count = 1L;
+                if(!Sentinel.exists(entry.previous)) count = 1L;
+                result = entry.previous;
+
                 break retry;
               }
 
@@ -1175,8 +961,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             // Try insert a new node if it hasn't previously existed, then
             // increment the count.
             if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>(value)))) {
-              transaction.setPrevious(null);
               count = 1L;
+              result = null;
               break;
             }
           } else if(node.hash == SyncMap.NODE_MOVED) {
@@ -1191,9 +977,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     // If the node matches the hash and key, updates the value
                     // and increment the count if the value was null or
                     // expunged.
-                    SyncMap.transactValue(transaction, node.reference, value);
+                    entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, value);
 
-                    if(transaction.matchPrevious(previous -> previous == null || previous == SyncMap.VALUE_EXPUNGED)) count = 1L;
+                    if(!Sentinel.exists(entry.previous)) count = 1L;
+                    result = entry.previous;
+
                     break retry;
                   }
 
@@ -1203,8 +991,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     // node and increment the count.
                     previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
 
-                    transaction.setPrevious(null);
                     count = 1L;
+                    result = null;
                     break retry;
                   }
                 }
@@ -1218,7 +1006,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count > 0L) this.addCount(count);
-    return transaction.getActualPrevious();
+    return Sentinel.unbox(result);
   }
 
   /* package */ void amendNode(final int hash, final @NotNull K key, final @NotNull ValueReference<V> reference) {
@@ -1259,26 +1047,22 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
-  public V remove(final @NotNull Object key) {
+  public @Nullable V remove(final @NotNull Object key) {
     requireNonNull(key, "key");
 
     final int hash = SyncMap.spread(key.hashCode());
 
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry(); Object result = null;
     int length = table.length; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
       // Try update the node with the new value, only if it is present.
-      if(SyncMap.transactValue(
-          transaction,
-          node.reference,
-          null,
-          (previousValue, ignored) -> previousValue != null && previousValue != SyncMap.VALUE_EXPUNGED
-      ).commited()) {
+      if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.PRESENT_FLAG | Atomics.EXPUNGED_FLAG, null)).commited()) {
         // If the new value got committed (if it was present and not expunged),
         // and the new value is null, then decrement the count.
         count = -1L;
+        result = entry.previous;
       }
     } else if(this.amended && (table = this.mutableTable) != null) {
       length = table.length;
@@ -1290,12 +1074,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                if(SyncMap.transactValue(
-                    transaction,
-                    node.reference,
-                    null,
-                    (previousValue, ignored) -> previousValue != null
-                ).commited()) {
+                if((entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.PRESENT_FLAG, null)).commited()) {
                   // If the value was present or expunged and the next value
                   // is null, remove the node and decrement the count.
                   if(previousNode != null) {
@@ -1305,6 +1084,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
 
                   count = -1L;
+                  result = entry.previous;
                   break;
                 }
 
@@ -1323,7 +1103,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count != 0L) this.addCount(count);
-    return transaction.getActualPrevious();
+    return Sentinel.unbox(result);
   }
 
   @Override
@@ -1336,15 +1116,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
     int length = table.length; long count = 0L;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
       // Try update the node with the new value, only if it is present.
-      if(SyncMap.transactValue(
-          transaction,
-          node.reference,
-          null,
-          (previousValue, ignored) -> Objects.equals(previousValue, value)
-      ).commited()) {
+      if(Atomics.replace(SyncMap.NODE_VALUE, node.reference, value, null)) {
         // If the new value got committed (if it was present and not expunged),
         // and the new value is null, then decrement the count.
         count = -1L;
@@ -1359,12 +1133,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                if(SyncMap.transactValue(
-                    transaction,
-                    node.reference,
-                    null,
-                    (previousValue, ignored) -> Objects.equals(previousValue, value)
-                ).commited()) {
+                if(Atomics.replace(SyncMap.NODE_VALUE, node.reference, value, null)) {
                   // If the value was present or expunged and the next value
                   // is null, remove the node and decrement the count.
                   if(previousNode != null) {
@@ -1374,7 +1143,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
 
                   count = -1L;
-                  break;
                 }
 
                 break;
@@ -1392,28 +1160,24 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     if(count != 0L) this.addCount(count);
-    return transaction.commited();
+    return count < 0L;
   }
 
   @Override
-  public V replace(final @NotNull K key, final @NotNull V value) {
+  public @Nullable V replace(final @NotNull K key, final @NotNull V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
     final int hash = SyncMap.spread(key.hashCode());
 
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry(); Object result = null;
     int length = table.length;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
       // Try update the node with the new value, only if it is present.
-      SyncMap.transactValue(
-          transaction,
-          node.reference,
-          value,
-          (previousValue, ignored) -> previousValue != null && previousValue != SyncMap.VALUE_EXPUNGED
-      );
+      entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.PRESENT_FLAG, value);
+      result = entry.previous;
     } else if(this.amended && (table = this.mutableTable) != null) {
       length = table.length;
 
@@ -1424,12 +1188,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           if(SyncMap.getNode(table, index) == node) {
             for(; ; ) {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                SyncMap.transactValue(
-                    transaction,
-                    node.reference,
-                    value,
-                    (previousValue, ignored) -> previousValue != null
-                );
+                entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.PRESENT_FLAG, value);
+                result = entry.previous;
 
                 break;
               }
@@ -1443,7 +1203,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
     }
 
-    return transaction.getActualPrevious();
+    return Sentinel.unbox(result);
   }
 
   @Override
@@ -1457,15 +1217,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] table = this.immutableTable; Node<K, V> node;
     int length = table.length;
 
-    final ValueTransaction<V> transaction = new ValueTransaction<>();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
       // Try update the node with the new value, only if it is present.
-      SyncMap.transactValue(
-          transaction,
-          node.reference,
-          newValue,
-          (previousValue, ignored) -> Objects.equals(previousValue, oldValue)
-      );
+      return Atomics.replace(SyncMap.NODE_VALUE, node.reference, oldValue, newValue);
     } else if(this.amended && (table = this.mutableTable) != null) {
       length = table.length;
 
@@ -1474,28 +1228,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
         synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
-            for(; ; ) {
+            do {
               if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                SyncMap.transactValue(
-                    transaction,
-                    node.reference,
-                    newValue,
-                    (previousValue, ignored) -> Objects.equals(previousValue, oldValue)
-                );
-
-                break;
+                return Atomics.replace(SyncMap.NODE_VALUE, node.reference, oldValue, newValue);
               }
-
-              if((node = node.next) == null) {
-                break;
-              }
-            }
+            } while((node = node.next) != null);
           }
         }
       }
     }
 
-    return transaction.commited();
+    return false;
   }
 
   // Bulk Operations
@@ -1510,7 +1253,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     Node<K, V> node; V value;
     while((node = traverser.advanceNode()) != null) {
-      if((value = SyncMap.getActualValue(node.reference)) != null) {
+      if((value = Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, node.reference))) != null) {
         action.accept(node.key, value);
       }
     }
@@ -1523,8 +1266,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final Traverser<K, V> traverser = new Traverser<>(this.immutableTable);
 
     Node<K, V> node; long count = 0L;
+    Atomics.ValueEntry entry = new Atomics.ValueEntry();
     while((node = traverser.advanceNode()) != null) {
-      if(SyncMap.clearValue(node.reference)) count--;
+      entry = Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, null);
+      if(Sentinel.exists(entry.previous)) count--;
     }
 
     this.addCount(count);
@@ -1612,7 +1357,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Creates a new mutable table with an increased capacity from the previous
    * mutable table and transfers the nodes to it.
    */
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({"rawtypes", "unchecked"})
   /* package */ void resize() {
     Node<K, V>[] source, destination; OperationToken token;
     int length;
@@ -1689,7 +1434,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Creates a new mutable table from the immutable table, when new nodes are
    * required and transfers the nodes to it.
    */
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({"rawtypes", "unchecked"})
   /* package */ void amend() {
     Node<K, V>[] destination; OperationToken token;
 
@@ -1782,6 +1527,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param resize whether this is a resize operation
    * @return the transfer progress count
    */
+  @SuppressWarnings({"SynchronizationOnLocalVariableOrMethodParameter"})
   /* package */ int transfer(final Node<K, V>@NotNull [] source, final Node<K, V>@NotNull [] destination, final boolean resize) {
     final int capacity = source.length, nextCapacity = destination.length;
 
@@ -1838,7 +1584,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               while((node = next) != null) {
                 next = node.next;
 
-                if(!resize && (SyncMap.getValue(node.reference) == SyncMap.VALUE_EXPUNGED || SyncMap.replaceValue(node.reference, null, SyncMap.VALUE_EXPUNGED))) {
+                if(!resize && (Atomics.get(SyncMap.NODE_VALUE, node.reference) == Sentinel.EXPUNGED || Atomics.replace(SyncMap.NODE_VALUE, node.reference, null, Sentinel.EXPUNGED))) {
                   continue;
                 }
 
@@ -1916,56 +1662,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     /* package */ ValueReference(final @Nullable T value) {
       this.value = value;
-    }
-  }
-
-  /**
-   * Represents a transaction between a previous value and the next value.
-   *
-   * @param <V> the value type
-   */
-  /* package */ static final class ValueTransaction<V> {
-    private Object previous = SyncMap.VALUE_UNCOMMITED;
-    private Object next = SyncMap.VALUE_UNCOMMITED;
-
-    /* package */ boolean commited() {
-      return this.next != SyncMap.VALUE_UNCOMMITED;
-    }
-
-    /* package */ boolean matchPrevious(final @NotNull Predicate<Object> matcher) {
-      return matcher.test(this.previous);
-    }
-
-    /* package */ boolean matchNext(final @NotNull Predicate<Object> matcher) {
-      return matcher.test(this.next);
-    }
-
-    /* package */ <T extends V> @Nullable T getActualPrevious() {
-      return this.toActual(this.previous);
-    }
-
-    /* package */ <T extends V> @Nullable T getActualNext() {
-      return this.toActual(this.next);
-    }
-
-    /* package */ @Nullable Object setPrevious(final @Nullable Object value) {
-      this.previous = value;
-      return value;
-    }
-
-    /* package */ void setNext(final @Nullable Object value) {
-      this.next = value;
-    }
-
-    /* package */ void reset() {
-      this.previous = SyncMap.VALUE_UNCOMMITED;
-      this.next = SyncMap.VALUE_UNCOMMITED;
-    }
-
-    @SuppressWarnings("unchecked")
-    private <T extends V> @Nullable T toActual(final @Nullable Object value) {
-      if(value == null || value == SyncMap.VALUE_UNCOMMITED || value == SyncMap.VALUE_EXPUNGED) return null;
-      return (T) value;
     }
   }
 
@@ -2199,6 +1895,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * Represents a unique token for an operation that has been started.
    */
+  @SuppressWarnings("unused")
   /* package */ static final class OperationToken {
     /* package */ final int operation;
 
@@ -2215,7 +1912,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * Represents a view of a map entry.
    */
-  /* package */ final class MapEntry implements Map.Entry<K, V> {
+  /* package */ final class MapEntry implements Entry<K, V> {
     private final K key;
     private V value;
 
@@ -2298,9 +1995,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents an entry {@link Iterator} that traverses the nodes in the
    * given table.
    */
-  /* package */ final class EntryIterator extends Traverser<K, V> implements Iterator<Map.Entry<K, V>> {
-    private Map.Entry<K, V> next;
-    private Map.Entry<K, V> current;
+  /* package */ final class EntryIterator extends Traverser<K, V> implements Iterator<Entry<K, V>> {
+    private Entry<K, V> next;
+    private Entry<K, V> current;
 
     /* package */ EntryIterator(final Node<K, V>@NotNull [] table) {
       super(table);
@@ -2315,7 +2012,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     @Override
     public @NotNull Entry<K, V> next() {
-      final Map.Entry<K, V> current;
+      final Entry<K, V> current;
       if((current = this.next) == null) throw new NoSuchElementException();
       this.current = current;
       this.advanceEntry();
@@ -2324,7 +2021,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     @Override
     public void remove() {
-      final Map.Entry<K, V> current;
+      final Entry<K, V> current;
       if((current = this.current) == null) throw new IllegalStateException();
       this.current = null;
       SyncMap.this.remove(current.getKey(), current.getValue());
@@ -2336,7 +2033,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node<K, V> node;
       V value;
       while((node = this.advanceNode()) != null) {
-        if((value = SyncMap.getActualValue(node.reference)) != null) {
+        if((value = Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, node.reference))) != null) {
           this.next = new MapEntry(node.key, value);
           break;
         }
