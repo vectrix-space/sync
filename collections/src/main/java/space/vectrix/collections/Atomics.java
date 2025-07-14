@@ -26,6 +26,7 @@ package space.vectrix.collections;
 import java.lang.invoke.VarHandle;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -35,23 +36,33 @@ import org.jetbrains.annotations.Nullable;
  *
  * @since 1.0.0
  */
-@SuppressWarnings({"PointlessBitwiseExpression", "SameParameterValue"})
+@SuppressWarnings("SameParameterValue")
 @ApiStatus.Experimental
 /* package */ final class Atomics {
   /**
-   * Represents a flag that selects a {@code null} value.
+   * Represents a predicate to check whether a value is empty.
    */
-  /* package */ static final int EMPTY_FLAG = 1 << 0;
+  /* package */ static Predicate<@Nullable Object> IS_EMPTY = Objects::isNull;
 
   /**
-   * Represents a flag that selects a present value, that is not a sentinel.
+   * Represents a predicate to check whether a value is expunged.
    */
-  /* package */ static final int PRESENT_FLAG = 1 << 1;
+  /* package */ static Predicate<@Nullable Object> IS_EXPUNGED = that -> that == Sentinel.EXPUNGED;
 
   /**
-   * Represents a flag that selects an expunged value.
+   * Represents a predicate to check whether a value is present.
    */
-  /* package */ static final int EXPUNGED_FLAG = 1 << 2;
+  /* package */ static Predicate<@Nullable Object> IS_PRESENT = that -> that != null && !(that instanceof Sentinel);
+
+  /**
+   * Represents a predicate to check whether a value is empty or expunged.
+   */
+  /* package */ static Predicate<@Nullable Object> IS_EMPTY_OR_EXPUNGED = Atomics.IS_EMPTY.or(Atomics.IS_EXPUNGED);
+
+  /**
+   * Represents a predicate to check whether a value is empty or present.
+   */
+  /* package */ static Predicate<@Nullable Object> IS_EMPTY_OR_PRESENT = Atomics.IS_EMPTY.or(Atomics.IS_PRESENT);
 
   /**
    * Returns the current value avoiding load and store reordering.
@@ -66,7 +77,7 @@ import org.jetbrains.annotations.Nullable;
   }
 
   /**
-   * Atomically replaces the existing value with the new value, returning the
+   * Atomically replaces the existing value with the new value, setting the
    * previous value.
    *
    * @param entry the value entry
@@ -74,15 +85,18 @@ import org.jetbrains.annotations.Nullable;
    * @param holder the variable holder
    * @param value the new value
    * @param <T> the value type
-   * @return the previous value
    */
-  /* package */ static <T> @NotNull ValueEntry replace(final @NotNull ValueEntry entry,
-                                                       final @NotNull VarHandle handle,
-                                                       final @NotNull Object holder,
-                                                       final @Nullable T value) {
+  /* package */ static <T> void replace(final @NotNull ValueEntry entry,
+                                        final @NotNull VarHandle handle,
+                                        final @NotNull Object holder,
+                                        final @Nullable T value) {
     Object current = Atomics.get(handle, holder), next;
     for(; ; ) {
-      if((next = handle.compareAndExchange(holder, current, value)) == current) return entry.set(current, value);
+      if((next = handle.compareAndExchange(holder, current, value)) == current) {
+        entry.set(current, value);
+        return;
+      }
+
       current = next;
       Thread.onSpinWait();
     }
@@ -90,22 +104,25 @@ import org.jetbrains.annotations.Nullable;
 
   /**
    * Atomically replaces the existing value with the new value from the mapper,
-   * returning the previous and next value.
+   * setting the previous and next value.
    *
    * @param entry the value entry
    * @param handle the variable reference
    * @param holder the variable holder
    * @param mapper the value mapper
    * @param <T> the value type
-   * @return the previous and next value
    */
-  /* package */ static <T> @NotNull ValueEntry computeAndReplace(final @NotNull ValueEntry entry,
-                                                                 final @NotNull VarHandle handle,
-                                                                 final @NotNull Object holder,
-                                                                 final @NotNull Function<@Nullable Object, @Nullable T> mapper) {
+  /* package */ static <T> void computeAndReplace(final @NotNull ValueEntry entry,
+                                                  final @NotNull VarHandle handle,
+                                                  final @NotNull Object holder,
+                                                  final @NotNull Function<@Nullable Object, @Nullable T> mapper) {
     Object current = Atomics.get(handle, holder), next; T value;
     for(; ; ) {
-      if((next = handle.compareAndExchange(holder, current, (value = mapper.apply(current)))) == current) return entry.set(current, value);
+      if((next = handle.compareAndExchange(holder, current, (value = mapper.apply(current)))) == current) {
+        entry.set(current, value);
+        return;
+      }
+
       current = next;
       Thread.onSpinWait();
     }
@@ -113,26 +130,33 @@ import org.jetbrains.annotations.Nullable;
 
   /**
    * Atomically replaces the existing value with the new value, if the given
-   * flag allows the current value, returning the previous value, and next
-   * value or {@link Sentinel#EMPTY}.
+   * comparison {@link Predicate} allows the current value, setting the
+   * previous value, and next value or {@link Sentinel#EMPTY}. Returns
+   * {@code true} if updated, otherwise {@code false}.
    *
    * @param entry the value entry
    * @param handle the variable reference
    * @param holder the variable holder
-   * @param flag the flag to match the current value against
+   * @param compare the predicate to match the current value against
    * @param value the new value
    * @param <T> the value type
-   * @return the previous value and next value
+   * @return whether the value was updated
    */
-  /* package */ static <T> @NotNull ValueEntry replace(final @NotNull ValueEntry entry,
-                                                       final @NotNull VarHandle handle,
-                                                       final @NotNull Object holder,
-                                                       final int flag,
-                                                       final @Nullable T value) {
+  /* package */ static <T> boolean replace(final @NotNull ValueEntry entry,
+                                           final @NotNull VarHandle handle,
+                                           final @NotNull Object holder,
+                                           final @NotNull Predicate<@Nullable Object> compare,
+                                           final @Nullable T value) {
     Object current = Atomics.get(handle, holder), next;
     for(; ; ) {
-      if(Atomics.checkFlags(current, flag)) return entry.set(current, Sentinel.EMPTY);
-      if((next = handle.compareAndExchange(holder, current, value)) == current) return entry.set(current, value);
+      if(!compare.test(current)) {
+        entry.set(current, Sentinel.EMPTY);
+        return false;
+      } else if((next = handle.compareAndExchange(holder, current, value)) == current) {
+        entry.set(current, value);
+        return true;
+      }
+
       current = next;
       Thread.onSpinWait();
     }
@@ -140,25 +164,33 @@ import org.jetbrains.annotations.Nullable;
 
   /**
    * Atomically replaces the existing value with the new value from the mapper,
-   * returning the previous, and next value or {@link Sentinel#EMPTY}.
+   * if the given comparison {@link Predicate} allows the current value,
+   * setting the previous, and next value or {@link Sentinel#EMPTY}. Returns
+   * {@code true} if updated, otherwise {@code false}.
    *
    * @param entry the value entry
    * @param handle the variable reference
    * @param holder the variable holder
-   * @param flag the flag to match the current value against
+   * @param compare the predicate to match the current value against
    * @param mapper the value mapper
    * @param <T> the value type
-   * @return the previous and next value
+   * @return whether the value was updated
    */
-  /* package */ static <T> @NotNull ValueEntry computeAndReplace(final @NotNull ValueEntry entry,
-                                                                 final @NotNull VarHandle handle,
-                                                                 final @NotNull Object holder,
-                                                                 final int flag,
-                                                                 final @NotNull Function<@Nullable Object, @Nullable T> mapper) {
+  /* package */ static <T> boolean computeAndReplace(final @NotNull ValueEntry entry,
+                                                     final @NotNull VarHandle handle,
+                                                     final @NotNull Object holder,
+                                                     final @NotNull Predicate<@Nullable Object> compare,
+                                                     final @NotNull Function<@Nullable Object, @Nullable T> mapper) {
     Object current = Atomics.get(handle, holder), next; T value;
     for(; ; ) {
-      if(Atomics.checkFlags(current, flag)) return entry.set(current, Sentinel.EMPTY);
-      if((next = handle.compareAndExchange(holder, current, (value = mapper.apply(current)))) == current) return entry.set(current, value);
+      if(!compare.test(current)) {
+        entry.set(current, Sentinel.EMPTY);
+        return false;
+      } else if((next = handle.compareAndExchange(holder, current, (value = mapper.apply(current)))) == current) {
+        entry.set(current, value);
+        return true;
+      }
+
       current = next;
       Thread.onSpinWait();
     }
@@ -188,11 +220,6 @@ import org.jetbrains.annotations.Nullable;
     }
   }
 
-  private static boolean checkFlags(final @Nullable Object previous, final int compare) {
-    final int mask = previous == null ? Atomics.EMPTY_FLAG : (previous == Sentinel.EXPUNGED ? Atomics.EXPUNGED_FLAG : Atomics.PRESENT_FLAG);
-    return (compare & mask) == 0;
-  }
-
   private Atomics() {
   }
 
@@ -207,14 +234,9 @@ import org.jetbrains.annotations.Nullable;
     /* package */ ValueEntry() {
     }
 
-    /* package */ ValueEntry set(final @Nullable Object previous, final @Nullable Object next) {
+    /* package */ void set(final @Nullable Object previous, final @Nullable Object next) {
       this.previous = previous;
       this.next = next;
-      return this;
-    }
-
-    /* package */ boolean commited() {
-      return this.next != Sentinel.EMPTY;
     }
   }
 }

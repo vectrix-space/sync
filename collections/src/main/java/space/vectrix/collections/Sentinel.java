@@ -55,15 +55,4 @@ import org.jetbrains.annotations.Nullable;
     if(value == null || value instanceof Sentinel) return null;
     return (V) value;
   }
-
-  /**
-   * Returns {@code true} if the original value exists and is not a sentinel
-   * or {@code null}, otherwise returns {@code false}.
-   *
-   * @param value the value
-   * @return true if the original value exists, otherwise false
-   */
-  /* package */ static boolean exists(final @Nullable Object value) {
-    return value != null && !(value instanceof Sentinel);
-  }
 }

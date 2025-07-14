@@ -14,6 +14,18 @@ val libs = extensions.getByType(org.gradle.accessors.dm.LibrariesForLibs::class)
 plugins.withId("me.champeau.jmh") {
   extensions.configure(JmhParameters::class) {
     jmhVersion = libs.versions.jmh.get()
+
+    jvm.set(
+      javaToolchains
+        .launcherFor {
+          languageVersion.set(JavaLanguageVersion.of(21))
+        }
+        .map { launcher ->
+          launcher.executablePath
+            .asFile
+            .absolutePath
+        }
+    )
   }
 
   tasks.named("compileJmhJava") {
