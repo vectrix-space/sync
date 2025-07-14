@@ -90,14 +90,14 @@ import org.jetbrains.annotations.Nullable;
                                         final @NotNull VarHandle handle,
                                         final @NotNull Object holder,
                                         final @Nullable T value) {
-    Object current = Atomics.get(handle, holder), next;
+    Object current;
     for(; ; ) {
-      if((next = handle.compareAndExchange(holder, current, value)) == current) {
+      current = handle.getAcquire(holder);
+      if(handle.compareAndSet(holder, current, value)) {
         entry.set(current, value);
         return;
       }
 
-      current = next;
       Thread.onSpinWait();
     }
   }
@@ -116,14 +116,14 @@ import org.jetbrains.annotations.Nullable;
                                                   final @NotNull VarHandle handle,
                                                   final @NotNull Object holder,
                                                   final @NotNull Function<@Nullable Object, @Nullable T> mapper) {
-    Object current = Atomics.get(handle, holder), next; T value;
+    Object current; T value;
     for(; ; ) {
-      if((next = handle.compareAndExchange(holder, current, (value = mapper.apply(current)))) == current) {
+      current = handle.getAcquire(holder);
+      if(handle.compareAndSet(holder, current, (value = mapper.apply(current)))) {
         entry.set(current, value);
         return;
       }
 
-      current = next;
       Thread.onSpinWait();
     }
   }
@@ -147,17 +147,17 @@ import org.jetbrains.annotations.Nullable;
                                            final @NotNull Object holder,
                                            final @NotNull Predicate<@Nullable Object> compare,
                                            final @Nullable T value) {
-    Object current = Atomics.get(handle, holder), next;
+    Object current;
     for(; ; ) {
+      current = handle.getAcquire(holder);
       if(!compare.test(current)) {
         entry.set(current, Sentinel.EMPTY);
         return false;
-      } else if((next = handle.compareAndExchange(holder, current, value)) == current) {
+      } else if(handle.compareAndSet(holder, current, value)) {
         entry.set(current, value);
         return true;
       }
 
-      current = next;
       Thread.onSpinWait();
     }
   }
@@ -181,17 +181,17 @@ import org.jetbrains.annotations.Nullable;
                                                      final @NotNull Object holder,
                                                      final @NotNull Predicate<@Nullable Object> compare,
                                                      final @NotNull Function<@Nullable Object, @Nullable T> mapper) {
-    Object current = Atomics.get(handle, holder), next; T value;
+    Object current; T value;
     for(; ; ) {
+      current = handle.getAcquire(holder);
       if(!compare.test(current)) {
         entry.set(current, Sentinel.EMPTY);
         return false;
-      } else if((next = handle.compareAndExchange(holder, current, (value = mapper.apply(current)))) == current) {
+      } else if(handle.compareAndSet(holder, current, (value = mapper.apply(current)))) {
         entry.set(current, value);
         return true;
       }
 
-      current = next;
       Thread.onSpinWait();
     }
   }
