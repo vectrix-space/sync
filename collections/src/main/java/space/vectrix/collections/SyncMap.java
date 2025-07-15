@@ -899,91 +899,102 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length, index; long count = 0L;
+    Node<K, V>[] table = this.immutableTable; int length = table.length;
+    Node<K, V> node; K nodeKey;
 
     final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
-      && (node = node.find(hash, key)) != null
-      && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, value)) {
-      // If the new value got committed (if it was not expunged), then see if
-      // the previous value was null to increase the count.
-      if(!Atomics.IS_PRESENT.test(entry.previous)) count = 1L;
-    } else {
-      retry: for(; ; ) {
-        table = this.immutableTable;
-        length = table.length;
 
-        if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
-          do {
-            if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EXPUNGED, value)) {
-                // Attempt to unexpunge the value and set the new value. If the
-                // new value was committed, then add the node back to the
-                // mutable table and increment the count.
-                this.amendNode(hash, key, node.reference);
+    // Fast-path: Update an existing value reference if possible, lock-free.
+    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+      do {
+        if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+          if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, value)) {
+            // If the new value got committed (if it was not expunged), then see if
+            // the previous value was null to increase the count.
+            if(Atomics.IS_EMPTY.test(entry.previous)) this.addCount(1L);
+            return Sentinel.unbox(entry.previous);
+          }
 
-                count = 1L;
-                break retry;
-              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, value)) {
-                // If the value was not expunged and the previous value was
-                // null, increment the count.
-                if(!Atomics.IS_PRESENT.test(entry.previous)) count = 1L;
-                break retry;
-              }
-
-              continue retry;
-            }
-          } while((node = node.next) != null);
+          break;
         }
+      } while((node = node.next) != null);
+    }
 
-        if((table = this.mutableTable) == null || (length = table.length) == 0) {
-          this.amend();
-        } else {
-          if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-            // Try insert a new node if it hasn't previously existed, then
-            // increment the count.
-            if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>(value)))) {
+    // Slow-path: Add a new value or update a value reference that has not been
+    //            promoted yet, with locking.
+    long count = 0L; int index;
+    retry: for(; ; ) {
+      if((node = SyncMap.getNode((table = this.immutableTable), (table.length - 1) & hash)) != null) {
+        do {
+          if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+            final ValueReference<V> reference;
+            final Object current = entry.previous = Atomics.get(SyncMap.NODE_VALUE, reference = node.reference);
+            if(Atomics.IS_EXPUNGED.test(current) && Atomics.replace(SyncMap.NODE_VALUE, reference, current, value)) {
+              // Attempt to unexpunge the value and set the new value. If the
+              // new value was committed, then add the node back to the
+              // mutable table and increment the count.
+              this.amendNode(hash, key, reference);
+
               count = 1L;
-              entry.previous = null;
-              break;
+              break retry;
+            } else if(Atomics.IS_EMPTY_OR_PRESENT.test(current) && Atomics.replace(SyncMap.NODE_VALUE, reference, current, value)) {
+              // If the value was not expunged and the previous value was
+              // null, increment the count.
+              if(Atomics.IS_EMPTY.test(entry.previous)) count = 1L;
+              break retry;
             }
-          } else if(node.hash == SyncMap.NODE_MOVED) {
-            // If the node has moved during a transfer, join the effort in
-            // completing the transfer.
-            this.helpTransfer();
-          } else {
-            synchronized(node) {
-              if(SyncMap.getNode(table, index) == node) {
-                for(; ; ) {
-                  if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    // If the node matches the hash and key, updates the value
-                    // and increment the count if the value was null or
-                    // expunged.
-                    Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, value);
-                    if(!Atomics.IS_PRESENT.test(entry.previous)) count = 1L;
 
-                    break retry;
-                  }
+            continue retry;
+          }
+        } while((node = node.next) != null);
+      }
 
-                  final Node<K, V> previousNode = node;
-                  if((node = node.next) == null) {
-                    // If the node does not exist in this bucket, create a new
-                    // node and increment the count.
-                    previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
+      if((table = this.mutableTable) == null || (length = table.length) == 0) {
+        this.amend();
+      } else {
+        if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
+          // Try insert a new node if it hasn't previously existed, then
+          // increment the count.
+          if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>(value)))) {
+            count = 1L;
+            entry.previous = null;
+            break;
+          }
+        } else if(node.hash == SyncMap.NODE_MOVED) {
+          // If the node has moved during a transfer, join the effort in
+          // completing the transfer.
+          this.helpTransfer();
+        } else {
+          synchronized(node) {
+            if(SyncMap.getNode(table, index) == node) {
+              for(; ; ) {
+                if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                  // If the node matches the hash and key, updates the value
+                  // and increment the count if the value was null or
+                  // expunged.
+                  Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, value);
+                  if(Atomics.IS_EMPTY_OR_EXPUNGED.test(entry.previous)) count = 1L;
 
-                    count = 1L;
-                    entry.previous = null;
-                    break retry;
-                  }
+                  break retry;
+                }
+
+                final Node<K, V> previousNode = node;
+                if((node = node.next) == null) {
+                  // If the node does not exist in this bucket, create a new
+                  // node and increment the count.
+                  previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
+
+                  count = 1L;
+                  entry.previous = null;
+                  break retry;
                 }
               }
             }
           }
         }
-
-        Thread.onSpinWait();
       }
+
+      Thread.onSpinWait();
     }
 
     if(count > 0L) this.addCount(count);
@@ -1305,11 +1316,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           continue;
         }
 
+        this.misses.reset();
         this.amended = false;
         this.mutableTable = null;
         this.immutableTable = source;
-
-        this.misses.reset();
 
         this.resetToken(token);
         break;
