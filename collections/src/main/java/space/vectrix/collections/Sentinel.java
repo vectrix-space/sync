@@ -24,14 +24,16 @@
 package space.vectrix.collections;
 
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * Provides common sentinels for the collections.
  *
+ * @author Vectrix
  * @since 1.0.0
  */
-@ApiStatus.Experimental
+@ApiStatus.Internal
 /* package */ enum Sentinel {
   /**
    * Represents a sentinel for an empty or unset value.
@@ -52,7 +54,22 @@ import org.jetbrains.annotations.Nullable;
    */
   @SuppressWarnings("unchecked")
   /* package */ static <V> @Nullable V unbox(final @Nullable Object value) {
-    if(value == null || value instanceof Sentinel) return null;
+    if(value == null || value == Sentinel.EMPTY || value == Sentinel.EXPUNGED) return null;
+    return (V) value;
+  }
+
+  /**
+   * Returns the original value or the default value if the value was unboxed
+   * from a sentinel.
+   *
+   * @param value the value
+   * @param defaultValue the default value
+   * @param <V> the expected value type
+   * @return the original value or default value
+   */
+  @SuppressWarnings("unchecked")
+  /* package */ static <V> @NotNull V unboxOr(final @Nullable Object value, final @NotNull V defaultValue) {
+    if(value == null || value == Sentinel.EMPTY || value == Sentinel.EXPUNGED) return defaultValue;
     return (V) value;
   }
 }

@@ -34,15 +34,16 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Provides methods to deal with atomic updates to fields.
  *
+ * @author Vectrix
  * @since 1.0.0
  */
 @SuppressWarnings("SameParameterValue")
-@ApiStatus.Experimental
+@ApiStatus.Internal
 /* package */ final class Atomics {
   /**
-   * Represents a predicate to check whether a value is empty.
+   * Represents a predicate to check whether a value is {@code null}.
    */
-  /* package */ static Predicate<@Nullable Object> IS_EMPTY = Objects::isNull;
+  /* package */ static Predicate<@Nullable Object> IS_NULL = Objects::isNull;
 
   /**
    * Represents a predicate to check whether a value is expunged.
@@ -52,29 +53,17 @@ import org.jetbrains.annotations.Nullable;
   /**
    * Represents a predicate to check whether a value is present.
    */
-  /* package */ static Predicate<@Nullable Object> IS_PRESENT = that -> that != null && !(that instanceof Sentinel);
+  /* package */ static Predicate<@Nullable Object> IS_PRESENT = that -> that != null && !(that == Sentinel.EMPTY || that == Sentinel.EXPUNGED);
 
   /**
    * Represents a predicate to check whether a value is empty or expunged.
    */
-  /* package */ static Predicate<@Nullable Object> IS_EMPTY_OR_EXPUNGED = Atomics.IS_EMPTY.or(Atomics.IS_EXPUNGED);
+  /* package */ static Predicate<@Nullable Object> IS_NULL_OR_EXPUNGED = that -> that == null || that == Sentinel.EXPUNGED;
 
   /**
    * Represents a predicate to check whether a value is empty or present.
    */
-  /* package */ static Predicate<@Nullable Object> IS_EMPTY_OR_PRESENT = Atomics.IS_EMPTY.or(Atomics.IS_PRESENT);
-
-  /**
-   * Returns the current value avoiding load and store reordering.
-   *
-   * @param handle the variable reference
-   * @param holder the variable holder
-   * @return the current value
-   */
-  /* package */ static @Nullable Object get(final @NotNull VarHandle handle,
-                                            final @NotNull Object holder) {
-    return handle.getAcquire(holder);
-  }
+  /* package */ static Predicate<@Nullable Object> IS_EMPTY_OR_PRESENT = that -> that != Sentinel.EXPUNGED;
 
   /**
    * Atomically replaces the existing value with the new value, setting the
@@ -214,7 +203,7 @@ import org.jetbrains.annotations.Nullable;
                                            final @Nullable T value) {
     Object current;
     for(; ; ) {
-      if(!Objects.equals(current = Atomics.get(handle, holder), compare)) return false;
+      if(!Objects.equals(current = handle.getAcquire(holder), compare)) return false;
       if(handle.compareAndSet(holder, current, value)) return true;
       Thread.onSpinWait();
     }
@@ -234,6 +223,12 @@ import org.jetbrains.annotations.Nullable;
     /* package */ ValueEntry() {
     }
 
+    /**
+     * Sets the previous and next value for this snapshot.
+     *
+     * @param previous the previous value
+     * @param next the next value
+     */
     /* package */ void set(final @Nullable Object previous, final @Nullable Object next) {
       this.previous = previous;
       this.next = next;

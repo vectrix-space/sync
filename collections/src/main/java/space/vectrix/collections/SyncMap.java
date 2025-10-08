@@ -59,8 +59,7 @@ import static java.util.Objects.requireNonNull;
  * performance in other cases are close or equal to that of {@link
  * ConcurrentHashMap} which is faster than a traditional
  * map paired with a read and write lock, or maps with an exclusive lock (such
- * as using {@link Collections#synchronizedMap(Map)}) in high concurrency
- * scenarios.</p>
+ * as using {@link Collections#synchronizedMap(Map)}) in similar scenarios.</p>
  *
  * <p>Null values or keys are not accepted.</p>
  *
@@ -292,8 +291,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents the {@link OperationToken} for the current operation if started,
    * otherwise {@code null}.
    */
-  @SuppressWarnings("FieldMayBeFinal")
-  private transient volatile @Nullable OperationToken token = null;
+  @SuppressWarnings({"FieldMayBeFinal", "unused"})
+  private transient volatile @Nullable OperationToken token;
 
   /**
    * Represents the transfer index a thread may claim a range of when
@@ -374,8 +373,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   public boolean isEmpty() {
-    final long sum = this.size.sum();
-    return sum <= 0L;
+    return this.size.sum() <= 0L;
   }
 
   @Override
@@ -385,7 +383,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = SyncMap.spread(key.hashCode());
 
     final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) != null && Atomics.IS_PRESENT.test(Atomics.get(SyncMap.NODE_VALUE, reference));
+    return (reference = this.getValue(hash, key)) != null && Atomics.IS_PRESENT.test(SyncMap.NODE_VALUE.getAcquire(reference));
   }
 
   @Override
@@ -395,7 +393,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = SyncMap.spread(key.hashCode());
 
     final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) != null ? Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, reference)) : null;
+    return (reference = this.getValue(hash, key)) != null ? Sentinel.unbox(SyncMap.NODE_VALUE.getAcquire(reference)) : null;
   }
 
   @Override
@@ -405,10 +403,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    final ValueReference<V> reference; final V next;
+    final ValueReference<V> reference;
     return (reference = this.getValue(hash, key)) == null
       ? defaultValue
-      : ((next = Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, reference))) == null ? defaultValue : next);
+      : Sentinel.unboxOr(SyncMap.NODE_VALUE.getAcquire(reference), defaultValue);
   }
 
   @SuppressWarnings("unchecked")
@@ -482,7 +480,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final Atomics.ValueEntry entry = new Atomics.ValueEntry();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
         && (node = node.find(hash, key)) != null
-        && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY, (value = mappingFunction.apply(key)))) {
+        && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, (value = mappingFunction.apply(key)))) {
       // If the new value got committed (if it was null), and the new value is
       // not null, then increment the count.
       if(value != null) count = 1L;
@@ -509,7 +507,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
                 result = value;
                 break retry;
-              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY, value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key)))) {
+              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key)))) {
                 // If the value was null and the next value is not null,
                 // increment the count.
                 if(value != null) count = 1L;
@@ -547,13 +545,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           } else if(node.hash == SyncMap.NODE_MOVED) {
             // If the node has moved during a transfer, join the effort in
             // completing the transfer.
-            this.helpTransfer();
+            this.forward((ForwardingNode<K, V>) node);
           } else {
             synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
                 for(; ; ) {
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_EXPUNGED, value != Sentinel.EMPTY ? value : mappingFunction.apply(key))) {
+                    if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL_OR_EXPUNGED, value != Sentinel.EMPTY ? value : mappingFunction.apply(key))) {
                       // If the value was null or expunged and the next value
                       // is not null, increment the count.
                       if(value != null) count = 1L;
@@ -736,7 +734,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           } else if(node.hash == SyncMap.NODE_MOVED) {
             // If the node has moved during a transfer, join the effort in
             // completion the transfer.
-            this.helpTransfer();
+            this.forward((ForwardingNode<K, V>) node);
           } else {
             synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
@@ -807,7 +805,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final Atomics.ValueEntry entry = new Atomics.ValueEntry();
     if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
         && (node = node.find(hash, key)) != null
-        && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY, value)) {
+        && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, value)) {
       // If the new value got committed (if it was null), then increment
       // the count.
       count = 1L;
@@ -827,7 +825,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
                 count = 1L;
                 break retry;
-              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY, value)) {
+              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, value)) {
                 // If the value was null, increment the count.
                 count = 1L;
                 break retry;
@@ -854,7 +852,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           } else if(node.hash == SyncMap.NODE_MOVED) {
             // If the node has moved during a transfer, join the effort in
             // completing the transfer.
-            this.helpTransfer();
+            this.forward((ForwardingNode<K, V>) node);
           } else {
             synchronized(node) {
               if(SyncMap.getNode(table, index) == node) {
@@ -862,7 +860,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if(node.hash == hash && (node.key == key || node.key.equals(key))) {
                     // If the new value got committed (if it was null or
                     // expunged), then increment the count.
-                    if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_EXPUNGED, value)) {
+                    if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL_OR_EXPUNGED, value)) {
                       count = 1L;
                     }
 
@@ -899,114 +897,126 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; int length = table.length;
-    Node<K, V> node; K nodeKey;
-
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
+    Node<K, V>[] immutableTable = this.immutableTable;
+    int length = immutableTable.length;
+    Node<K, V> node = SyncMap.getNode(immutableTable, (length - 1) & hash);
+    K nodeKey;
 
     // Fast-path: Update an existing value reference if possible, lock-free.
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
-      do {
-        if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
-          if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, value)) {
-            // If the new value got committed (if it was not expunged), then see if
-            // the previous value was null to increase the count.
-            if(Atomics.IS_EMPTY.test(entry.previous)) this.addCount(1L);
-            return Sentinel.unbox(entry.previous);
-          }
+    while(node != null) {
+      if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+        node = node.next;
+        continue;
+      }
 
-          break;
-        }
-      } while((node = node.next) != null);
+      final Atomics.ValueEntry entry = new Atomics.ValueEntry();
+      if(!Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, value)) break;
+
+      // If the new value got committed (if it was not expunged), then see if
+      // the previous value was null to increase the count.
+      if(entry.previous == null) this.addCount(1L);
+      return Sentinel.unbox(entry.previous);
     }
 
     // Slow-path: Add a new value or update a value reference that has not been
     //            promoted yet, with locking.
-    long count = 0L; int index;
-    retry: for(; ; ) {
-      if((node = SyncMap.getNode((table = this.immutableTable), (table.length - 1) & hash)) != null) {
-        do {
-          if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
-            final ValueReference<V> reference;
-            final Object current = entry.previous = Atomics.get(SyncMap.NODE_VALUE, reference = node.reference);
-            if(Atomics.IS_EXPUNGED.test(current) && Atomics.replace(SyncMap.NODE_VALUE, reference, current, value)) {
-              // Attempt to unexpunge the value and set the new value. If the
-              // new value was committed, then add the node back to the
-              // mutable table and increment the count.
-              this.amendNode(hash, key, reference);
+    for(Node<K, V>[] mutableTable = this.mutableTable; ; ) {
+      immutableTable = this.immutableTable;
+      length = immutableTable.length;
+      node = SyncMap.getNode(immutableTable, (length - 1) & hash);
 
-              count = 1L;
-              break retry;
-            } else if(Atomics.IS_EMPTY_OR_PRESENT.test(current) && Atomics.replace(SyncMap.NODE_VALUE, reference, current, value)) {
-              // If the value was not expunged and the previous value was
-              // null, increment the count.
-              if(Atomics.IS_EMPTY.test(entry.previous)) count = 1L;
-              break retry;
-            }
-
-            continue retry;
-          }
-        } while((node = node.next) != null);
+      // Re-check the immutable table, even if it is unlikely it would have
+      // updated during this action.
+      if(node != null) {
+        final Object current = this.immutableAmend(node, hash, key, value);
+        if(current != Sentinel.EMPTY) return Sentinel.unbox(current);
       }
 
-      if((table = this.mutableTable) == null || (length = table.length) == 0) {
+      // Now check the mutable table.
+      final int index;
+      if(!this.amended || mutableTable == null || (length = mutableTable.length) == 0) {
         this.amend();
+      } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
+        // Try insert a new node if it hasn't previously existed, then
+        // increment the count.
+        if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ValueReference<>(value)))) {
+          this.addCount(1L);
+          return null;
+        }
+      } else if(node.hash == SyncMap.NODE_MOVED) {
+        // If the node has moved during a resize transfer, follow
+        // to the next table if possible.
+        mutableTable = this.forward((ForwardingNode<K, V>) node);
+        continue;
       } else {
-        if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-          // Try insert a new node if it hasn't previously existed, then
-          // increment the count.
-          if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>(value)))) {
-            count = 1L;
-            entry.previous = null;
-            break;
-          }
-        } else if(node.hash == SyncMap.NODE_MOVED) {
-          // If the node has moved during a transfer, join the effort in
-          // completing the transfer.
-          this.helpTransfer();
-        } else {
-          synchronized(node) {
-            if(SyncMap.getNode(table, index) == node) {
-              for(; ; ) {
-                if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
-                  // If the node matches the hash and key, updates the value
-                  // and increment the count if the value was null or
-                  // expunged.
-                  Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, value);
-                  if(Atomics.IS_EMPTY_OR_EXPUNGED.test(entry.previous)) count = 1L;
+        synchronized(node) {
+          if(SyncMap.getNode(mutableTable, index) == node) {
+            for(; ; ) {
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                // If the node matches the hash and key, updates the value
+                // and increment the count if the value was null or
+                // expunged.
+                final Atomics.ValueEntry entry = new Atomics.ValueEntry();
+                Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, value);
 
-                  break retry;
-                }
+                if(Atomics.IS_NULL_OR_EXPUNGED.test(entry.previous)) this.addCount(1L);
+                return Sentinel.unbox(entry.previous);
+              }
 
-                final Node<K, V> previousNode = node;
-                if((node = node.next) == null) {
-                  // If the node does not exist in this bucket, create a new
-                  // node and increment the count.
-                  previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
+              final Node<K, V> previousNode = node;
+              if((node = node.next) == null) {
+                // If the node does not exist in this bucket, create a new
+                // node and increment the count.
+                previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
 
-                  count = 1L;
-                  entry.previous = null;
-                  break retry;
-                }
+                this.addCount(1L);
+                return null;
               }
             }
           }
         }
       }
 
-      Thread.onSpinWait();
+      mutableTable = this.mutableTable;
+    }
+  }
+
+  private @Nullable Object immutableAmend(Node<K, V> node, final int hash, final K key, final V value) {
+    K nodeKey;
+    while(node != null) {
+      if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+        node = node.next;
+        continue;
+      }
+
+      final ValueReference<V> reference = node.reference;
+      final Object current = SyncMap.NODE_VALUE.getAcquire(reference);
+
+      if(!SyncMap.NODE_VALUE.compareAndSet(reference, current, value)) continue;
+
+      if(Atomics.IS_EXPUNGED.test(current)) {
+        // Attempt to unexpunge the value and set the new value. If the
+        // new value was committed, then add the node back to the
+        // mutable table and increment the count.
+        this.amendNode(hash, key, reference);
+
+        this.addCount(1L);
+        return null;
+      } else {
+        if(current == null) this.addCount(1L);
+        return current;
+      }
     }
 
-    if(count > 0L) this.addCount(count);
-    return Sentinel.unbox(entry.previous);
+    return Sentinel.EMPTY;
   }
 
   /* package */ void amendNode(final int hash, final @NotNull K key, final @NotNull ValueReference<V> reference) {
     Node<K, V>[] table; Node<K, V> node;
     int index, length;
 
-    for(; ; ) {
-      if((table = this.mutableTable) == null || (length = table.length) == 0) {
+    for(table = this.mutableTable; ; ) {
+      if(!this.amended || table == null || (length = table.length) == 0) {
         // If the mutable table has been removed, we can't proceed.
         return;
       } else {
@@ -1015,9 +1025,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             return;
           }
         } else if(node.hash == SyncMap.NODE_MOVED) {
-          // If the node has moved during a transfer, join the effort in
-          // completing the transfer.
-          this.helpTransfer();
+          // If the node has moved during a resize transfer, follow
+          // to the next table if possible.
+          table = this.forward((ForwardingNode<K, V>) node);
         } else {
           synchronized(node) {
             if(SyncMap.getNode(table, index) == node) {
@@ -1242,7 +1252,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     Node<K, V> node; V value;
     while((node = traverser.advanceNode()) != null) {
-      if((value = Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, node.reference))) != null) {
+      if((value = Sentinel.unbox(SyncMap.NODE_VALUE.getAcquire(node.reference))) != null) {
         action.accept(node.key, value);
       }
     }
@@ -1340,6 +1350,23 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     if(value <= 0L) return;
     this.resize();
+  }
+
+  /**
+   * Assists in transferring nodes from the old table to the new table, during
+   * a resize.
+   *
+   * @param node the forwarding node
+   * @return the next table
+   * @since 1.0.0
+   */
+  /* package */ Node<K, V>@Nullable [] forward(final @NotNull ForwardingNode<K, V> node) {
+    if(this.amended) {
+      final Node<K, V>[] next = node.nextTable;
+      if(next == this.transferTable) return next;
+    }
+
+    return this.mutableTable;
   }
 
   /**
@@ -1497,17 +1524,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   /**
-   * Assists in transferring nodes from the old table to the new table.
-   */
-  /* package */ void helpTransfer() {
-    if(this.getToken(SyncMap.TRANSFER_RESIZE) != null) {
-      this.resize();
-    } else if(this.getToken(SyncMap.TRANSFER_AMEND) != null) {
-      this.amend();
-    }
-  }
-
-  /**
    * Transfers nodes from the {@code source} table to the {@code destination}
    * table and returns the amount of nodes that have been transferred.
    *
@@ -1573,7 +1589,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               while((node = next) != null) {
                 next = node.next;
 
-                if(!resize && (Atomics.get(SyncMap.NODE_VALUE, node.reference) == Sentinel.EXPUNGED || Atomics.replace(SyncMap.NODE_VALUE, node.reference, null, Sentinel.EXPUNGED))) {
+                if(!resize && (SyncMap.NODE_VALUE.getAcquire(node.reference) == Sentinel.EXPUNGED || Atomics.replace(SyncMap.NODE_VALUE, node.reference, null, Sentinel.EXPUNGED))) {
                   continue;
                 }
 
@@ -2022,7 +2038,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node<K, V> node;
       V value;
       while((node = this.advanceNode()) != null) {
-        if((value = Sentinel.unbox(Atomics.get(SyncMap.NODE_VALUE, node.reference))) != null) {
+        if((value = Sentinel.unbox(SyncMap.NODE_VALUE.getAcquire(node.reference))) != null) {
           this.next = new MapEntry(node.key, value);
           break;
         }
