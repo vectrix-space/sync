@@ -5,52 +5,52 @@
 The following benchmarks are a comparison of `SyncMap` vs `Collections#synchronizedMap()` vs `ConcurrentHashMap`.
 
 ```txt
-Benchmark                          (implementation)       (mode)  (size)   Mode  Cnt   Score   Error   Units
-SyncMapBenchmark.getOnly          ConcurrentHashMap         none  100000  thrpt    5  29.332 ± 0.053  ops/ms
-SyncMapBenchmark.getOnly          ConcurrentHashMap      presize  100000  thrpt    5  29.289 ± 0.015  ops/ms
-SyncMapBenchmark.getOnly          ConcurrentHashMap  prepopulate  100000  thrpt    5  26.329 ± 0.124  ops/ms
+Benchmark                          (implementation)       (mode)   Mode  Cnt  Score   Error   Units
+SyncMapBenchmark.getOnly          ConcurrentHashMap         none  thrpt    5  2.950 ± 0.024  ops/ns
+SyncMapBenchmark.getOnly          ConcurrentHashMap      presize  thrpt    5  2.949 ± 0.003  ops/ns
+SyncMapBenchmark.getOnly          ConcurrentHashMap  prepopulate  thrpt    5  2.664 ± 0.033  ops/ns
 
-SyncMapBenchmark.getOnly                    SyncMap         none  100000  thrpt    5  28.158 ± 0.222  ops/ms
-SyncMapBenchmark.getOnly                    SyncMap      presize  100000  thrpt    5  27.957 ± 0.252  ops/ms
-SyncMapBenchmark.getOnly                    SyncMap  prepopulate  100000  thrpt    5  23.932 ± 0.333  ops/ms
+SyncMapBenchmark.getOnly                    SyncMap         none  thrpt    5  2.840 ± 0.016  ops/ns
+SyncMapBenchmark.getOnly                    SyncMap      presize  thrpt    5  2.827 ± 0.004  ops/ns
+SyncMapBenchmark.getOnly                    SyncMap  prepopulate  thrpt    5  2.481 ± 0.041  ops/ns
 
-SyncMapBenchmark.getOnly            SynchronizedMap         none  100000  thrpt    5   0.272 ± 0.012  ops/ms
-SyncMapBenchmark.getOnly            SynchronizedMap      presize  100000  thrpt    5   0.275 ± 0.030  ops/ms
-SyncMapBenchmark.getOnly            SynchronizedMap  prepopulate  100000  thrpt    5   0.294 ± 0.227  ops/ms
+SyncMapBenchmark.getOnly            SynchronizedMap         none  thrpt    5  0.027 ± 0.003  ops/ns
+SyncMapBenchmark.getOnly            SynchronizedMap      presize  thrpt    5  0.028 ± 0.001  ops/ns
+SyncMapBenchmark.getOnly            SynchronizedMap  prepopulate  thrpt    5  0.034 ± 0.049  ops/ns
 
-SyncMapBenchmark.putAndGet                  SyncMap         none  100000  thrpt    5   3.244 ± 0.057  ops/ms
-SyncMapBenchmark.putAndGet                  SyncMap      presize  100000  thrpt    5   3.503 ± 0.281  ops/ms
-SyncMapBenchmark.putAndGet                  SyncMap  prepopulate  100000  thrpt    5   3.512 ± 0.079  ops/ms
+SyncMapBenchmark.putAndGet                  SyncMap         none  thrpt    5  0.426 ± 0.029  ops/ns
+SyncMapBenchmark.putAndGet                  SyncMap      presize  thrpt    5  0.440 ± 0.075  ops/ns
+SyncMapBenchmark.putAndGet                  SyncMap  prepopulate  thrpt    5  0.428 ± 0.077  ops/ns
 
-SyncMapBenchmark.putAndGet        ConcurrentHashMap         none  100000  thrpt    5   1.511 ± 0.024  ops/ms
-SyncMapBenchmark.putAndGet        ConcurrentHashMap      presize  100000  thrpt    5   2.343 ± 0.336  ops/ms
-SyncMapBenchmark.putAndGet        ConcurrentHashMap  prepopulate  100000  thrpt    5   2.438 ± 0.424  ops/ms
+SyncMapBenchmark.putAndGet        ConcurrentHashMap         none  thrpt    5  0.156 ± 0.006  ops/ns
+SyncMapBenchmark.putAndGet        ConcurrentHashMap      presize  thrpt    5  0.231 ± 0.058  ops/ns
+SyncMapBenchmark.putAndGet        ConcurrentHashMap  prepopulate  thrpt    5  0.239 ± 0.021  ops/ns
 
-SyncMapBenchmark.putAndGet          SynchronizedMap         none  100000  thrpt    5   0.123 ± 0.022  ops/ms
-SyncMapBenchmark.putAndGet          SynchronizedMap      presize  100000  thrpt    5   0.122 ± 0.014  ops/ms
-SyncMapBenchmark.putAndGet          SynchronizedMap  prepopulate  100000  thrpt    5   0.137 ± 0.180  ops/ms
+SyncMapBenchmark.putAndGet          SynchronizedMap         none  thrpt    5  0.013 ± 0.008  ops/ns
+SyncMapBenchmark.putAndGet          SynchronizedMap      presize  thrpt    5  0.012 ± 0.002  ops/ns
+SyncMapBenchmark.putAndGet          SynchronizedMap  prepopulate  thrpt    5  0.012 ± 0.003  ops/ns
 
-SyncMapBenchmark.putOnly                    SyncMap         none  100000  thrpt    5   2.023 ± 0.286  ops/ms
-SyncMapBenchmark.putOnly                    SyncMap      presize  100000  thrpt    5   2.036 ± 0.602  ops/ms
-SyncMapBenchmark.putOnly                    SyncMap  prepopulate  100000  thrpt    5   4.163 ± 0.137  ops/ms
+SyncMapBenchmark.putOnly                    SyncMap         none  thrpt    5  0.202 ± 0.027  ops/ns
+SyncMapBenchmark.putOnly                    SyncMap      presize  thrpt    5  0.249 ± 0.047  ops/ns
+SyncMapBenchmark.putOnly                    SyncMap  prepopulate  thrpt    5  0.437 ± 0.014  ops/ns
 
-SyncMapBenchmark.putOnly          ConcurrentHashMap         none  100000  thrpt    5   1.663 ± 0.088  ops/ms
-SyncMapBenchmark.putOnly          ConcurrentHashMap      presize  100000  thrpt    5   3.116 ± 0.592  ops/ms
-SyncMapBenchmark.putOnly          ConcurrentHashMap  prepopulate  100000  thrpt    5   3.060 ± 0.251  ops/ms
+SyncMapBenchmark.putOnly          ConcurrentHashMap         none  thrpt    5  0.164 ± 0.003  ops/ns
+SyncMapBenchmark.putOnly          ConcurrentHashMap      presize  thrpt    5  0.324 ± 0.040  ops/ns
+SyncMapBenchmark.putOnly          ConcurrentHashMap  prepopulate  thrpt    5  0.264 ± 0.029  ops/ns
 
-SyncMapBenchmark.putOnly            SynchronizedMap         none  100000  thrpt    5   0.277 ± 0.294  ops/ms
-SyncMapBenchmark.putOnly            SynchronizedMap      presize  100000  thrpt    5   0.228 ± 0.036  ops/ms
-SyncMapBenchmark.putOnly            SynchronizedMap  prepopulate  100000  thrpt    5   0.271 ± 0.253  ops/ms
+SyncMapBenchmark.putOnly            SynchronizedMap         none  thrpt    5  0.023 ± 0.004  ops/ns
+SyncMapBenchmark.putOnly            SynchronizedMap      presize  thrpt    5  0.026 ± 0.027  ops/ns
+SyncMapBenchmark.putOnly            SynchronizedMap  prepopulate  thrpt    5  0.027 ± 0.029  ops/ns
 
-SyncMapBenchmark.randomPutAndGet            SyncMap         none  100000  thrpt    5   1.560 ± 0.009  ops/ms
-SyncMapBenchmark.randomPutAndGet            SyncMap      presize  100000  thrpt    5   1.514 ± 0.037  ops/ms
-SyncMapBenchmark.randomPutAndGet            SyncMap  prepopulate  100000  thrpt    5   1.480 ± 0.034  ops/ms
+SyncMapBenchmark.randomPutAndGet            SyncMap         none  thrpt    5  0.193 ± 0.002  ops/ns
+SyncMapBenchmark.randomPutAndGet            SyncMap      presize  thrpt    5  0.205 ± 0.010  ops/ns
+SyncMapBenchmark.randomPutAndGet            SyncMap  prepopulate  thrpt    5  0.202 ± 0.001  ops/ns
 
-SyncMapBenchmark.randomPutAndGet  ConcurrentHashMap         none  100000  thrpt    5   1.278 ± 0.056  ops/ms
-SyncMapBenchmark.randomPutAndGet  ConcurrentHashMap      presize  100000  thrpt    5   1.430 ± 0.204  ops/ms
-SyncMapBenchmark.randomPutAndGet  ConcurrentHashMap  prepopulate  100000  thrpt    5   1.437 ± 0.134  ops/ms
+SyncMapBenchmark.randomPutAndGet  ConcurrentHashMap         none  thrpt    5  0.138 ± 0.003  ops/ns
+SyncMapBenchmark.randomPutAndGet  ConcurrentHashMap      presize  thrpt    5  0.146 ± 0.003  ops/ns
+SyncMapBenchmark.randomPutAndGet  ConcurrentHashMap  prepopulate  thrpt    5  0.145 ± 0.002  ops/ns
 
-SyncMapBenchmark.randomPutAndGet    SynchronizedMap         none  100000  thrpt    5   0.176 ± 0.116  ops/ms
-SyncMapBenchmark.randomPutAndGet    SynchronizedMap      presize  100000  thrpt    5   0.165 ± 0.142  ops/ms
-SyncMapBenchmark.randomPutAndGet    SynchronizedMap  prepopulate  100000  thrpt    5   0.188 ± 0.006  ops/ms
+SyncMapBenchmark.randomPutAndGet    SynchronizedMap         none  thrpt    5  0.018 ± 0.003  ops/ns
+SyncMapBenchmark.randomPutAndGet    SynchronizedMap      presize  thrpt    5  0.019 ± 0.009  ops/ns
+SyncMapBenchmark.randomPutAndGet    SynchronizedMap  prepopulate  thrpt    5  0.017 ± 0.012  ops/ns
 ```

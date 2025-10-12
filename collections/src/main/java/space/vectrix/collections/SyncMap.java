@@ -42,6 +42,7 @@ import java.util.function.Function;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.UnknownNullability;
 
 import static java.util.Objects.requireNonNull;
 
@@ -110,20 +111,43 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   /* package */ static final int NODE_MOVED = -1;
 
-  /*
-   * Lock states for bulk table updates.
+  /**
+   * Represents a sentinel value for an expunged object reference.
    */
-  /* package */ static final int TRANSFER_PROMOTE = -1;
-  /* package */ static final int TRANSFER_RESIZE = 1;
-  /* package */ static final int TRANSFER_AMEND = 2;
+  /* package */ static final Object EXPUNGED = new Object();
 
   /*
-   * Operation states for bulk table updates.
+   * Operation actions for bulk table updates.
    */
-  /* package */ static final int STATE_IDLE = 0;
-  /* package */ static final int STATE_ACHIEVED = 1;
-  /* package */ static final int STATE_COMPLETED = 2;
-  /* package */ static final int STATE_FINALIZED = 3;
+  /* package */ static final int ACTION_PROMOTE = 1;
+  /* package */ static final int ACTION_RESIZE = 2;
+  /* package */ static final int ACTION_AMEND = 3;
+
+  /*
+   * Operation goal for bulk table updates.
+   */
+  /* package */ static final int GOAL_RUNNING = 1;
+  /* package */ static final int GOAL_ACHIEVED = 2;
+  /* package */ static final int GOAL_FINALIZING = 3;
+
+  /*
+   * Shift for the operation state.
+   */
+  /* package */ static final int SHIFT_ACTION = 0;
+  /* package */ static final int SHIFT_GOAL = 2;
+  /* package */ static final int SHIFT_COUNT = 4;
+
+  /*
+   * Mask for the operation state.
+   */
+  /* package */ static final long MASK_ACTION = 0b11;
+  /* package */ static final long MASK_GOAL = 0b11;
+  /* package */ static final long MASK_COUNT = (1L << 60) - 1L;
+
+  /*
+   * Unit for the operation state.
+   */
+  /* package */ static final long COUNT_UNIT = 1L << SyncMap.SHIFT_COUNT;
 
   /**
    * Represents the maximum number of processors for transfer size limits.
@@ -159,6 +183,30 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return length <= 0 ? 1 : (length >= SyncMap.MAXIMUM_CAPACITY ? SyncMap.MAXIMUM_CAPACITY : length + 1);
   }
 
+  /**
+   * Packs the value into the operation state.
+   *
+   * @param value the value
+   * @param shift the value shift
+   * @param mask the value mask
+   * @return the packed value
+   */
+  /* package */ static long operationPack(final long value, final int shift, final long mask) {
+    return (value & mask) << shift;
+  }
+
+  /**
+   * Extracts the value from this operation state.
+   *
+   * @param value the operation state
+   * @param shift the value shift
+   * @param mask the value mask
+   * @return the value
+   */
+  /* package */ static long operationExtract(final long value, final int shift, final long mask) {
+    return (value >>> shift) & mask;
+  }
+
   /* ---------------------------- < Reflection > ---------------------------- */
 
   /**
@@ -167,22 +215,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final VarHandle NODE_ARRAY;
 
   /**
-   * Provides atomic operations for {@link ValueReference#value}.
-   */
-  /* package */ static final VarHandle NODE_VALUE;
-
-  /**
-   * Provides atomic operations for {@link SyncMap#token}.
-   */
-  /* package */ static final VarHandle OPERATION_TOKEN;
-
-  /**
-   * Provides atomic operations for {@link OperationToken#threads}.
-   */
-  /* package */ static final VarHandle OPERATION_THREADS;
-
-  /**
-   * Provides atomic operations for {@link OperationToken#state}.
+   * Provides atomic operations for {@link SyncMap#operationState}.
    */
   /* package */ static final VarHandle OPERATION_STATE;
 
@@ -201,10 +234,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       final MethodHandles.Lookup lookup = MethodHandles.lookup();
 
       NODE_ARRAY = MethodHandles.arrayElementVarHandle(Node[].class);
-      NODE_VALUE = lookup.findVarHandle(ValueReference.class, "value", Object.class);
-      OPERATION_TOKEN = lookup.findVarHandle(SyncMap.class, "token", OperationToken.class);
-      OPERATION_THREADS = lookup.findVarHandle(OperationToken.class, "threads", int.class);
-      OPERATION_STATE = lookup.findVarHandle(OperationToken.class, "state", int.class);
+      OPERATION_STATE = lookup.findVarHandle(SyncMap.class, "operationState", long.class);
       TRANSFER_INDEX = lookup.findVarHandle(SyncMap.class, "transferIndex", int.class);
       TRANSFER_PROGRESS = lookup.findVarHandle(SyncMap.class, "transferProgress", int.class);
     } catch(final Exception exception) {
@@ -212,7 +242,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
   }
 
-  /* ------------------------------- < Table > ------------------------------- */
+  /* ------------------------------- < Table > ------------------------------ */
 
   /**
    * Returns the {@link Node} at the given {@code index}, if present, otherwise
@@ -225,7 +255,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the node, or null
    */
   @SuppressWarnings("unchecked")
-  /* package */ static <K, V> @Nullable Node<K, V> getNode(final Node<K, V> @NotNull [] table, final int index) {
+  /* package */ static <K, V> @Nullable Node<K, V> getNode(final Node<K, V>@NotNull [] table, final int index) {
     return (Node<K, V>) SyncMap.NODE_ARRAY.getAcquire(table, index);
   }
 
@@ -240,7 +270,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param nextNode the new node
    * @return true if new node was set, otherwise false
    */
-  /* package */ static <K, V> boolean replaceNode(final Node<K, V> @NotNull [] table, final int index, final @Nullable Node<K, V> nextNode) {
+  /* package */ static <K, V> boolean replaceNode(final Node<K, V>@NotNull [] table, final int index, final @Nullable Node<K, V> nextNode) {
     return SyncMap.NODE_ARRAY.compareAndSet(table, index, (Node<K, V>) null, nextNode);
   }
 
@@ -288,11 +318,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   private transient volatile boolean amended;
 
   /**
-   * Represents the {@link OperationToken} for the current operation if started,
-   * otherwise {@code null}.
+   * Represents the operation state for a bulk operation.
    */
-  @SuppressWarnings({"FieldMayBeFinal", "unused"})
-  private transient volatile @Nullable OperationToken token;
+  @SuppressWarnings("unused")
+  private transient volatile long operationState;
 
   /**
    * Represents the transfer index a thread may claim a range of when
@@ -382,40 +411,52 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) != null && Atomics.IS_PRESENT.test(SyncMap.NODE_VALUE.getAcquire(reference));
+    final ObjectReference reference = this.getValue(hash, key);
+    if(reference == null) return false;
+
+    final Object value = reference.get();
+    return value != null && value != SyncMap.EXPUNGED;
   }
 
   @Override
-  public V get(final @NotNull Object key) {
+  @SuppressWarnings("unchecked")
+  public @Nullable V get(final @NotNull Object key) {
     requireNonNull(key, "key");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) != null ? Sentinel.unbox(SyncMap.NODE_VALUE.getAcquire(reference)) : null;
+    final ObjectReference reference = this.getValue(hash, key);
+    if(reference == null) return null;
+
+    final Object value = reference.get();
+    if(value == SyncMap.EXPUNGED) return null;
+
+    return (V) value;
   }
 
   @Override
-  public V getOrDefault(final @NotNull Object key, final @NotNull V defaultValue) {
+  @SuppressWarnings("unchecked")
+  public @NotNull V getOrDefault(final @NotNull Object key, final @NotNull V defaultValue) {
     requireNonNull(key, "key");
     requireNonNull(defaultValue, "defaultValue");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    final ValueReference<V> reference;
-    return (reference = this.getValue(hash, key)) == null
-      ? defaultValue
-      : Sentinel.unboxOr(SyncMap.NODE_VALUE.getAcquire(reference), defaultValue);
+    final ObjectReference reference = this.getValue(hash, key);
+    if(reference == null) return defaultValue;
+
+    final Object value = reference.get();
+    if(value == null || value == SyncMap.EXPUNGED) return defaultValue;
+
+    return (V) value;
   }
 
-  @SuppressWarnings("unchecked")
-  /* package */ final @Nullable ValueReference<V> getValue(final int hash, final @NotNull Object key) {
-    ValueReference<V> reference;
-    if((reference = this.getImmutableValue(hash, (K) key)) != null) {
+  /* package */ final @Nullable ObjectReference getValue(final int hash, final @NotNull Object key) {
+    ObjectReference reference;
+    if((reference = this.getImmutableValue(hash, key)) != null) {
       return reference;
     } else if(this.amended) {
-      reference = this.getMutableValue(hash, (K) key);
+      reference = this.getMutableValue(hash, key);
 
       // Record a miss even if the node does not exist, but only if the table
       // is amended.
@@ -426,7 +467,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return null;
   }
 
-  /* package */ final @Nullable ValueReference<V> getImmutableValue(final int hash, final @NotNull K key) {
+  /* package */ final @Nullable ObjectReference getImmutableValue(final int hash, final @NotNull Object key) {
     final Node<K, V>[] table = this.immutableTable;
 
     Node<K, V> node; K nodeKey;
@@ -441,7 +482,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return null;
   }
 
-  /* package */ final @Nullable ValueReference<V> getMutableValue(final int hash, final @NotNull K key) {
+  /* package */ final @Nullable ObjectReference getMutableValue(final int hash, final @NotNull Object key) {
     final Node<K, V>[] table = this.mutableTable;
     Node<K, V> node;
     final int nodeHash; K nodeKey;
@@ -473,575 +514,503 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    Object value = Sentinel.EMPTY; Object result;
-    int length = table.length, index; long count = 0L;
-
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
-        && (node = node.find(hash, key)) != null
-        && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, (value = mappingFunction.apply(key)))) {
-      // If the new value got committed (if it was null), and the new value is
-      // not null, then increment the count.
-      if(value != null) count = 1L;
-      result = value;
-    } else if(!Atomics.IS_PRESENT.test(result = entry.previous)) {
-      // Only proceed here if the previous value was null, expunged or
-      // uncommitted.
-      retry: for(; ; ) {
-        table = this.immutableTable;
-        length = table.length;
-
-        if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
-          do {
-            if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EXPUNGED, value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key)))) {
-                // If the next value is not null, attempt to unexpunge the
-                // value and set the new value. Then add the node back to
-                // the mutable table and increment the count.
-                if(value != null) {
-                  this.amendNode(hash, key, node.reference);
-
-                  count = 1L;
-                }
-
-                result = value;
-                break retry;
-              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key)))) {
-                // If the value was null and the next value is not null,
-                // increment the count.
-                if(value != null) count = 1L;
-
-                result = value;
-                break retry;
-              } else if(Atomics.IS_PRESENT.test(entry.next)) {
-                // If the value was present and not expunged, return.
-                result = entry.previous;
-                break retry;
-              }
-
-              continue retry;
-            }
-          } while((node = node.next) != null);
+    V next;
+    retry: for(Node<K, V>[] immutableTable, mutableTable = null; ; ) {
+      Node<K, V> node = SyncMap.getNode((immutableTable = this.immutableTable), immutableTable.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
         }
 
-        if((table = this.mutableTable) == null || (length = table.length) == 0) {
-          this.amend();
-        } else {
-          if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-            // Compute and check if the value is not null, if not then break.
-            if((value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key))) == null) {
-              result = null;
-              break;
-            }
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current != null && current != SyncMap.EXPUNGED) return (V) current;
 
-            // Try insert a new node if it hasn't previously existed, then
-            // increment the count.
-            if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>((V) value)))) {
-              count = 1L;
-              result = value;
-              break;
-            }
-          } else if(node.hash == SyncMap.NODE_MOVED) {
-            // If the node has moved during a transfer, join the effort in
-            // completing the transfer.
-            this.forward((ForwardingNode<K, V>) node);
-          } else {
-            synchronized(node) {
-              if(SyncMap.getNode(table, index) == node) {
+          next = mappingFunction.apply(key);
+          if(next == null) return null;
+
+          final Object previous = reference.compareAndExchange(current, next);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          if(previous == SyncMap.EXPUNGED) {
+            this.amendNode(hash, key, reference);
+          }
+
+          break retry;
+        }
+      }
+
+      final int length, index;
+      if(!this.amended || (mutableTable == null && (mutableTable = this.mutableTable) == null) || (length = mutableTable.length) == 0) {
+        this.amend();
+      } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
+        next = mappingFunction.apply(key);
+        if(next == null) return null;
+
+        // Try insert a new node if it hasn't previously existed, then
+        // increment the count.
+        if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+          break;
+        }
+
+        Thread.onSpinWait();
+      } else if(node.hash == SyncMap.NODE_MOVED) {
+        mutableTable = this.forward((ForwardingNode<K, V>) node);
+      } else {
+        synchronized(node) {
+          if(SyncMap.getNode(mutableTable, index) == node) {
+            for(; ; ) {
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
                 for(; ; ) {
-                  if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL_OR_EXPUNGED, value != Sentinel.EMPTY ? value : mappingFunction.apply(key))) {
-                      // If the value was null or expunged and the next value
-                      // is not null, increment the count.
-                      if(value != null) count = 1L;
-                      result = value;
-                      break retry;
-                    }
+                  if(current != null && current != SyncMap.EXPUNGED) return (V) current;
 
-                    result = entry.previous;
-                    break retry;
+                  next = mappingFunction.apply(key);
+                  if(next == null) return null;
+
+                  final Object previous = reference.compareAndExchange(current, next);
+                  if (previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
                   }
 
-                  final Node<K, V> previousNode = node;
-                  if((node = node.next) == null) {
-                    // Compute and check if the value is not null, if not then
-                    // break.
-                    if((value != Sentinel.EMPTY ? value : (value = mappingFunction.apply(key))) == null) {
-                      result = null;
-                      break retry;
-                    }
-
-                    // If the node does not exist in this bucket, create a new
-                    // node and increment the count.
-                    previousNode.next = new Node<>(hash, key, new ValueReference<>((V) value));
-                    count = 1L;
-                    result = value;
-                    break retry;
-                  }
+                  break retry;
                 }
+              }
+
+              final Node<K, V> previousNode = node;
+              if((node = node.next) == null) {
+                next = mappingFunction.apply(key);
+                if(next == null) return null;
+
+                // If the node does not exist in this bucket, create a new
+                // node and increment the count.
+                previousNode.next = new Node<>(hash, key, new ObjectReference(next));
+                break retry;
               }
             }
           }
         }
-
-        Thread.onSpinWait();
       }
     }
 
-    if(count > 0L) this.addCount(count);
-    return Sentinel.unbox(result);
+    this.addCount(1L);
+    return next;
   }
 
   @Override
+  @SuppressWarnings("unchecked")
   public @Nullable V computeIfPresent(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length; long count = 0L;
+    V next; long count = 0L;
+    retry: for(Node<K, V>[] table; ; ) {
+      Node<K, V> node = SyncMap.getNode((table = this.immutableTable), table.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
 
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
-      // Try update the node with the new value, only if it is present.
-      if(Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_PRESENT, that -> remappingFunction.apply(key, Sentinel.unbox(that))) && entry.next == null) {
-        // If the new value got committed (if it was present and not expunged),
-        // and the new value is null, then decrement the count.
-        count = -1L;
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current == null || current == SyncMap.EXPUNGED) return null;
+          next = remappingFunction.apply(key, (V) current);
+
+          final Object previous = reference.compareAndExchange(current, next);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          if(next == null) {
+            count = -1L;
+          }
+
+          break retry;
+        }
       }
-    } else if(this.amended && (table = this.mutableTable) != null) {
-      length = table.length;
 
-      // Only proceed here if the node did not exist in the immutable table.
+      if(!this.amended || (table = this.mutableTable) == null) return null;
+
       final int index;
-      if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
+      if((node = SyncMap.getNode(table, index = (table.length - 1) & hash)) != null) {
         synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
-              if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                if(Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_PRESENT, that -> remappingFunction.apply(key, Sentinel.unbox(that))) && entry.next == null) {
-                  // If the value was present or expunged and the next value
-                  // is null, remove the node and decrement the count.
-                  if(previousNode != null) {
-                    previousNode.next = node.next;
-                  } else {
-                    SyncMap.setNode(table, index, node.next);
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  if(current == null || current == SyncMap.EXPUNGED) return null;
+                  next = remappingFunction.apply(key, (V) current);
+
+                  final Object previous = reference.compareAndExchange(current, next);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
                   }
 
-                  count = -1L;
-                }
+                  if(next == null) {
+                    if(previousNode != null) {
+                      previousNode.next = node.next;
+                    } else {
+                      SyncMap.setNode(table, index, node.next);
+                    }
 
-                break;
+                    count = -1L;
+                  }
+
+                  break retry;
+                }
               }
 
               previousNode = node;
 
               if((node = node.next) == null) {
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if(count != 0L) this.addCount(count);
-    return Sentinel.unbox(entry.next);
-  }
-
-  @Override
-  @SuppressWarnings("unchecked")
-  public @Nullable V compute(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
-    requireNonNull(key, "key");
-    requireNonNull(remappingFunction, "remappingFunction");
-
-    final int hash = SyncMap.spread(key.hashCode());
-
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    Object value = Sentinel.EMPTY;
-    int length = table.length, index; long count = 0L;
-
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
-        && (node = node.find(hash, key)) != null
-        && Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, that -> remappingFunction.apply(key, Sentinel.unbox(that)))
-    ) {
-      // If the value was null and the new value is not null, then increment
-      // the count. If the value was not null and the new value is null, then
-      // decrement the count.
-      if(entry.previous == null && entry.next != null) {
-        count = 1L;
-      } else if(entry.previous != null && entry.next == null) {
-        count = -1L;
-      }
-    } else {
-      // Only proceed here if the previous value was expunged or uncommitted.
-      retry: for(; ; ) {
-        table = this.immutableTable;
-        length = table.length;
-
-        if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
-          do {
-            if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EXPUNGED, that -> remappingFunction.apply(key, Sentinel.unbox(that)))) {
-                // Attempt to unexpunge the value and set the new value. If the
-                // next value was not null, increment the count. If the next
-                // value was null, decrement the count.
-                if(entry.next != null) {
-                  this.amendNode(hash, key, node.reference);
-
-                  count = 1L;
-                }
-
-                break retry;
-              } else if(Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, that -> remappingFunction.apply(key, Sentinel.unbox(that)))) {
-                // If the value was not expunged then set the new value. If the
-                // next value was not null, increment the count. If the next
-                // value was null, decrement the count.
-                if(entry.previous == null && entry.next != null) {
-                  count = 1L;
-                } else if(entry.previous != null && entry.next == null) {
-                  count = -1L;
-                }
-
-                break retry;
-              }
-
-              continue retry;
-            }
-          } while((node = node.next) != null);
-        }
-
-        if((table = this.mutableTable) == null || (length = table.length) == 0) {
-          this.amend();
-        } else {
-          if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-            // Compute and check if the value is not null, if not then break.
-            if((value != Sentinel.EMPTY ? value : (value = remappingFunction.apply(key, null))) == null) {
-              entry.next = null;
-              break;
-            }
-
-            // Try insert a new node if it hasn't previously existed, then
-            // increment the count.
-            if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>((V) value)))) {
-              count = 1L;
-              entry.next = value;
-              break;
-            }
-          } else if(node.hash == SyncMap.NODE_MOVED) {
-            // If the node has moved during a transfer, join the effort in
-            // completion the transfer.
-            this.forward((ForwardingNode<K, V>) node);
-          } else {
-            synchronized(node) {
-              if(SyncMap.getNode(table, index) == node) {
-                for(Node<K, V> previousNode = null; ; ) {
-                  if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    Atomics.computeAndReplace(entry, SyncMap.NODE_VALUE, node.reference, that -> remappingFunction.apply(key, Sentinel.unbox(that)));
-
-                    // If the value was null or expunged and the next value
-                    // and the next value is not null, increment the count.
-                    // If value was not null and the next value was null,
-                    // decrement the count.
-                    if(!Atomics.IS_PRESENT.test(entry.previous) && entry.next != null) {
-                      count = 1L;
-                    } else if(Atomics.IS_PRESENT.test(entry.previous) && entry.next == null) {
-                      if(previousNode != null) {
-                        previousNode.next = node.next;
-                      } else {
-                        SyncMap.setNode(table, index, node.next);
-                      }
-
-                      count = -1L;
-                    }
-
-                    break retry;
-                  }
-
-                  previousNode = node;
-                  if((node = node.next) == null) {
-                    if((value != Sentinel.EMPTY ? value : (value = remappingFunction.apply(key, null))) == null) {
-                      // Compute and check if the value is not null, if not
-                      // then break.
-                      entry.next = null;
-                      break retry;
-                    }
-
-                    // If the node does not exist in this bucket, create a new
-                    // node and increment the count.
-                    previousNode.next = new Node<>(hash, key, new ValueReference<>((V) value));
-
-                    count = 1L;
-                    entry.next = value;
-                    break retry;
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        Thread.onSpinWait();
-      }
-    }
-
-    if(count != 0L) this.addCount(count);
-    return Sentinel.unbox(entry.next);
-  }
-
-  @Override
-  public @Nullable V putIfAbsent(final @NotNull K key, final @NotNull V value) {
-    requireNonNull(key, "key");
-    requireNonNull(value, "value");
-
-    final int hash = SyncMap.spread(key.hashCode());
-
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length, index; long count = 0L;
-
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null
-        && (node = node.find(hash, key)) != null
-        && Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, value)) {
-      // If the new value got committed (if it was null), then increment
-      // the count.
-      count = 1L;
-    } else if(!Atomics.IS_PRESENT.test(entry.previous)) {
-      retry: for(; ; ) {
-        table = this.immutableTable;
-        length = table.length;
-
-        if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
-          do {
-            if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-              if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EXPUNGED, value)) {
-                // Attempt to unexpunge the value and set the new value. If the
-                // new value was committed, then add the node back to the
-                // mutable table and increment the count.
-                this.amendNode(hash, key, node.reference);
-
-                count = 1L;
-                break retry;
-              } else if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL, value)) {
-                // If the value was null, increment the count.
-                count = 1L;
-                break retry;
-              } else if(Atomics.IS_PRESENT.test(entry.previous)) {
-                // If the value was present and not expunged, return.
-                break retry;
-              }
-
-              continue retry;
-            }
-          } while((node = node.next) != null);
-        }
-
-        if((table = this.mutableTable) == null || (length = table.length) == 0) {
-          this.amend();
-        } else {
-          if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-            // Try insert a new node if it hasn't previously existed, then
-            // increment the count.
-            if(SyncMap.replaceNode(table, index, new Node<>(hash, key, new ValueReference<>(value)))) {
-              count = 1L;
-              break;
-            }
-          } else if(node.hash == SyncMap.NODE_MOVED) {
-            // If the node has moved during a transfer, join the effort in
-            // completing the transfer.
-            this.forward((ForwardingNode<K, V>) node);
-          } else {
-            synchronized(node) {
-              if(SyncMap.getNode(table, index) == node) {
-                for(; ; ) {
-                  if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                    // If the new value got committed (if it was null or
-                    // expunged), then increment the count.
-                    if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_NULL_OR_EXPUNGED, value)) {
-                      count = 1L;
-                    }
-
-                    break retry;
-                  }
-
-                  final Node<K, V> previousNode = node;
-                  if((node = node.next) == null) {
-                    // If the node does not exist in this bucket, create a new
-                    // node and increment the count.
-                    previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
-
-                    count = 1L;
-                    break retry;
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        Thread.onSpinWait();
-      }
-    }
-
-    if(count > 0L) this.addCount(count);
-    return Sentinel.unbox(entry.previous);
-  }
-
-  @Override
-  public @Nullable V put(final @NotNull K key, final @NotNull V value) {
-    requireNonNull(key, "key");
-    requireNonNull(value, "value");
-
-    final int hash = SyncMap.spread(key.hashCode());
-
-    Node<K, V>[] immutableTable = this.immutableTable;
-    int length = immutableTable.length;
-    Node<K, V> node = SyncMap.getNode(immutableTable, (length - 1) & hash);
-    K nodeKey;
-
-    // Fast-path: Update an existing value reference if possible, lock-free.
-    while(node != null) {
-      if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-        node = node.next;
-        continue;
-      }
-
-      final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-      if(!Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_EMPTY_OR_PRESENT, value)) break;
-
-      // If the new value got committed (if it was not expunged), then see if
-      // the previous value was null to increase the count.
-      if(entry.previous == null) this.addCount(1L);
-      return Sentinel.unbox(entry.previous);
-    }
-
-    // Slow-path: Add a new value or update a value reference that has not been
-    //            promoted yet, with locking.
-    for(Node<K, V>[] mutableTable = this.mutableTable; ; ) {
-      immutableTable = this.immutableTable;
-      length = immutableTable.length;
-      node = SyncMap.getNode(immutableTable, (length - 1) & hash);
-
-      // Re-check the immutable table, even if it is unlikely it would have
-      // updated during this action.
-      if(node != null) {
-        final Object current = this.immutableAmend(node, hash, key, value);
-        if(current != Sentinel.EMPTY) return Sentinel.unbox(current);
-      }
-
-      // Now check the mutable table.
-      final int index;
-      if(!this.amended || mutableTable == null || (length = mutableTable.length) == 0) {
-        this.amend();
-      } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
-        // Try insert a new node if it hasn't previously existed, then
-        // increment the count.
-        if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ValueReference<>(value)))) {
-          this.addCount(1L);
-          return null;
-        }
-      } else if(node.hash == SyncMap.NODE_MOVED) {
-        // If the node has moved during a resize transfer, follow
-        // to the next table if possible.
-        mutableTable = this.forward((ForwardingNode<K, V>) node);
-        continue;
-      } else {
-        synchronized(node) {
-          if(SyncMap.getNode(mutableTable, index) == node) {
-            for(; ; ) {
-              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
-                // If the node matches the hash and key, updates the value
-                // and increment the count if the value was null or
-                // expunged.
-                final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-                Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, value);
-
-                if(Atomics.IS_NULL_OR_EXPUNGED.test(entry.previous)) this.addCount(1L);
-                return Sentinel.unbox(entry.previous);
-              }
-
-              final Node<K, V> previousNode = node;
-              if((node = node.next) == null) {
-                // If the node does not exist in this bucket, create a new
-                // node and increment the count.
-                previousNode.next = new Node<>(hash, key, new ValueReference<>(value));
-
-                this.addCount(1L);
                 return null;
               }
             }
           }
         }
       }
-
-      mutableTable = this.mutableTable;
     }
+
+    this.addCount(count);
+    return next;
   }
 
-  private @Nullable Object immutableAmend(Node<K, V> node, final int hash, final K key, final V value) {
-    K nodeKey;
-    while(node != null) {
-      if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-        node = node.next;
-        continue;
+  @Override
+  @SuppressWarnings("unchecked")
+  public @Nullable V compute(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {
+    requireNonNull(key, "key");
+    requireNonNull(remappingFunction, "remappingFunction");
+
+    final int hash = SyncMap.spread(key.hashCode());
+
+    V next; long count = 0L;
+    retry: for(Node<K, V>[] immutableTable, mutableTable = null; ; ) {
+      Node<K, V> node = SyncMap.getNode((immutableTable = this.immutableTable), immutableTable.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
+
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          next = remappingFunction.apply(key, current == SyncMap.EXPUNGED ? null : (V) current);
+          if(next == null && (current == null || current == SyncMap.EXPUNGED)) return null;
+
+          final Object previous = reference.compareAndExchange(current, next);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          if(next != null) {
+            if(previous == null) {
+              count = 1L;
+            } else if(previous == SyncMap.EXPUNGED) {
+              this.amendNode(hash, key, reference);
+
+              count = 1L;
+            }
+          } else {
+            count = -1L;
+          }
+
+          break retry;
+        }
       }
 
-      final ValueReference<V> reference = node.reference;
-      final Object current = SyncMap.NODE_VALUE.getAcquire(reference);
+      final int length, index;
+      if(!this.amended || (mutableTable == null && (mutableTable = this.mutableTable) == null) || (length = mutableTable.length) == 0) {
+        this.amend();
+      } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
+        next = remappingFunction.apply(key, null);
+        if(next == null) return null;
 
-      if(!SyncMap.NODE_VALUE.compareAndSet(reference, current, value)) continue;
+        // Try insert a new node if it hasn't previously existed, then
+        // increment the count.
+        if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+          count = 1L;
+          break;
+        }
 
-      if(Atomics.IS_EXPUNGED.test(current)) {
-        // Attempt to unexpunge the value and set the new value. If the
-        // new value was committed, then add the node back to the
-        // mutable table and increment the count.
-        this.amendNode(hash, key, reference);
-
-        this.addCount(1L);
-        return null;
+        Thread.onSpinWait();
+      } else if(node.hash == SyncMap.NODE_MOVED) {
+        mutableTable = this.forward((ForwardingNode<K, V>) node);
       } else {
-        if(current == null) this.addCount(1L);
-        return current;
+        synchronized(node) {
+          if(SyncMap.getNode(mutableTable, index) == node) {
+            for(Node<K, V> previousNode = null; ; ) {
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  next = remappingFunction.apply(key, current == SyncMap.EXPUNGED ? null : (V) current);
+                  if(next == null && (current == null || current == SyncMap.EXPUNGED)) return null;
+
+                  final Object previous = reference.compareAndExchange(current, next);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
+                  if(next != null && (previous == null || previous == SyncMap.EXPUNGED)) {
+                    count = 1L;
+                  } else if(next == null && (previous != null && previous != SyncMap.EXPUNGED)) {
+                    if(previousNode != null) {
+                      previousNode.next = node.next;
+                    } else {
+                      SyncMap.setNode(mutableTable, index, node.next);
+                    }
+
+                    count = -1L;
+                  }
+
+                  break retry;
+                }
+              }
+
+              previousNode = node;
+
+              if((node = node.next) == null) {
+                next = remappingFunction.apply(key, null);
+                if(next == null) return null;
+
+                // If the node does not exist in this bucket, create a new
+                // node and increment the count.
+                previousNode.next = new Node<>(hash, key, new ObjectReference(next));
+
+                count = 1L;
+                break retry;
+              }
+            }
+          }
+        }
       }
     }
 
-    return Sentinel.EMPTY;
+    this.addCount(count);
+    return next;
   }
 
-  /* package */ void amendNode(final int hash, final @NotNull K key, final @NotNull ValueReference<V> reference) {
-    Node<K, V>[] table; Node<K, V> node;
-    int index, length;
+  @Override
+  @SuppressWarnings("unchecked")
+  public @Nullable V putIfAbsent(final @NotNull K key, final @NotNull V value) {
+    requireNonNull(key, "key");
+    requireNonNull(value, "value");
 
-    for(table = this.mutableTable; ; ) {
-      if(!this.amended || table == null || (length = table.length) == 0) {
+    final int hash = SyncMap.spread(key.hashCode());
+
+    retry: for(Node<K, V>[] immutableTable, mutableTable = null; ; ) {
+      Node<K, V> node = SyncMap.getNode((immutableTable = this.immutableTable), immutableTable.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
+
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current != null && current != SyncMap.EXPUNGED) return (V) current;
+
+          final Object previous = reference.compareAndExchange(current, value);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          if(previous == SyncMap.EXPUNGED) {
+            this.amendNode(hash, key, reference);
+          }
+
+          break retry;
+        }
+      }
+
+      final int length, index;
+      if(!this.amended || (mutableTable == null && (mutableTable = this.mutableTable) == null) || (length = mutableTable.length) == 0) {
+        this.amend();
+      } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
+        // Try insert a new node if it hasn't previously existed, then
+        // increment the count.
+        if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(value)))) {
+          break;
+        }
+
+        Thread.onSpinWait();
+      } else if(node.hash == SyncMap.NODE_MOVED) {
+        mutableTable = this.forward((ForwardingNode<K, V>) node);
+      } else {
+        synchronized(node) {
+          if(SyncMap.getNode(mutableTable, index) == node) {
+            for(; ; ) {
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  if(current != null && current != SyncMap.EXPUNGED) return (V) current;
+
+                  final Object previous = reference.compareAndExchange(current, value);
+                  if (previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
+                  break retry;
+                }
+              }
+
+              final Node<K, V> previousNode = node;
+              if((node = node.next) == null) {
+                // If the node does not exist in this bucket, create a new
+                // node and increment the count.
+                previousNode.next = new Node<>(hash, key, new ObjectReference(value));
+                break retry;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    this.addCount(1L);
+    return null;
+  }
+
+  @Override
+  @SuppressWarnings("unchecked")
+  public @Nullable V put(final @NotNull K key, final @NotNull V value) {
+    requireNonNull(key, "key");
+    requireNonNull(value, "value");
+
+    final int hash = SyncMap.spread(key.hashCode());
+
+    retry: for(Node<K, V>[] immutableTable, mutableTable = null; ; ) {
+      Node<K, V> node = SyncMap.getNode((immutableTable = this.immutableTable), immutableTable.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
+
+        final ObjectReference reference = node.reference;
+        final Object previous = reference.getAndSet(value);
+        if(previous == SyncMap.EXPUNGED) {
+          this.amendNode(hash, key, reference);
+        } else if(previous != null) {
+          return (V) previous;
+        }
+
+        break retry;
+      }
+
+      final int length, index;
+      if(!this.amended || (mutableTable == null && (mutableTable = this.mutableTable) == null) || (length = mutableTable.length) == 0) {
+        this.amend();
+      } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
+        // Try insert a new node if it hasn't previously existed, then
+        // increment the count.
+        if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(value)))) {
+          break;
+        }
+
+        Thread.onSpinWait();
+      } else if(node.hash == SyncMap.NODE_MOVED) {
+        mutableTable = this.forward((ForwardingNode<K, V>) node);
+      } else {
+        synchronized(node) {
+          if(SyncMap.getNode(mutableTable, index) == node) {
+            for(; ; ) {
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final Object previous = node.reference.getAndSet(value);
+                if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
+                break retry;
+              }
+
+              final Node<K, V> previousNode = node;
+              if((node = node.next) == null) {
+                // If the node does not exist in this bucket, create a new
+                // node and increment the count.
+                previousNode.next = new Node<>(hash, key, new ObjectReference(value));
+                break retry;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    this.addCount(1L);
+    return null;
+  }
+
+  /* package */ void amendNode(final int hash, final @NotNull K key, final @NotNull ObjectReference reference) {
+    Node<K, V>[] table = this.mutableTable;
+
+    for(Node<K, V> node; ; ) {
+      final int length, index;
+      if(!this.amended || (table == null && (table = this.mutableTable) == null) || (length = table.length) == 0) {
         // If the mutable table has been removed, we can't proceed.
         return;
-      } else {
-        if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-          if(SyncMap.replaceNode(table, index, new Node<>(hash, key, reference))) {
-            return;
-          }
-        } else if(node.hash == SyncMap.NODE_MOVED) {
-          // If the node has moved during a resize transfer, follow
-          // to the next table if possible.
-          table = this.forward((ForwardingNode<K, V>) node);
-        } else {
-          synchronized(node) {
-            if(SyncMap.getNode(table, index) == node) {
-              for(; ; ) {
-                if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                  node.reference = reference;
-                  return;
-                }
+      } else if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
+        // Try insert a new node if it hasn't previously existed.
+        if(SyncMap.replaceNode(table, index, new Node<>(hash, key, reference))) {
+          return;
+        }
 
-                final Node<K, V> previous = node;
-                if((node = node.next) == null) {
-                  previous.next = new Node<>(hash, key, reference);
-                  return;
-                }
+        Thread.onSpinWait();
+      } else if(node.hash == SyncMap.NODE_MOVED) {
+        table = this.forward((ForwardingNode<K, V>) node);
+      } else {
+        synchronized(node) {
+          if(SyncMap.getNode(table, index) == node) {
+            for(; ; ) {
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                node.reference = reference;
+                return;
+              }
+
+              final Node<K, V> previousNode = node;
+              if((node = node.next) == null) {
+                // If the node does not exist in this bucket, create a new
+                // node.
+                previousNode.next = new Node<>(hash, key, reference);
+                return;
               }
             }
           }
@@ -1051,52 +1020,73 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
+  @SuppressWarnings("unchecked")
   public @Nullable V remove(final @NotNull Object key) {
     requireNonNull(key, "key");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length; long count = 0L;
+    Object previous;
+    retry: for(Node<K, V>[] table; ; ) {
+      Node<K, V> node = SyncMap.getNode((table = this.immutableTable), table.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
 
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
-      // Try update the node with the new value, only if it is present.
-      if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_PRESENT, null)) {
-        // If the new value got committed (if it was present and not expunged),
-        // and the new value is null, then decrement the count.
-        count = -1L;
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current == null || current == SyncMap.EXPUNGED) return null;
+
+          previous = reference.compareAndExchange(current, null);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          break retry;
+        }
       }
-    } else if(this.amended && (table = this.mutableTable) != null) {
-      length = table.length;
 
-      // Only proceed here if the node did not exist in the immutable table.
+      if(!this.amended || (table = this.mutableTable) == null) return null;
+
       final int index;
-      if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
+      if((node = SyncMap.getNode(table, index = (table.length - 1) & hash)) != null) {
         synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
-              if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                if(Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_PRESENT, null)) {
-                  // If the value was present or expunged and the next value
-                  // is null, remove the node and decrement the count.
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  if(current == null || current == SyncMap.EXPUNGED) return null;
+
+                  previous = reference.compareAndExchange(current, null);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
                   if(previousNode != null) {
                     previousNode.next = node.next;
                   } else {
                     SyncMap.setNode(table, index, node.next);
                   }
 
-                  count = -1L;
-                  break;
+                  break retry;
                 }
-
-                break;
               }
 
               previousNode = node;
 
               if((node = node.next) == null) {
-                break;
+                return null;
               }
             }
           }
@@ -1104,8 +1094,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
     }
 
-    if(count != 0L) this.addCount(count);
-    return Sentinel.unbox(entry.previous);
+    this.addCount(-1L);
+    return (V) previous;
   }
 
   @Override
@@ -1115,45 +1105,68 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length; long count = 0L;
+    retry: for(Node<K, V>[] table; ; ) {
+      Node<K, V> node = SyncMap.getNode((table = this.immutableTable), table.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
 
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
-      // Try update the node with the new value, only if it is present.
-      if(Atomics.replace(SyncMap.NODE_VALUE, node.reference, value, null)) {
-        // If the new value got committed (if it was present and not expunged),
-        // and the new value is null, then decrement the count.
-        count = -1L;
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current == null || current == SyncMap.EXPUNGED) return false;
+          if(!Objects.equals(value, current)) return false;
+
+          final Object previous = reference.compareAndExchange(current, null);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          break retry;
+        }
       }
-    } else if(this.amended && (table = this.mutableTable) != null) {
-      length = table.length;
 
-      // Only proceed here if the node did not exist in the immutable table.
+      if(!this.amended || (table = this.mutableTable) == null) return false;
+
       final int index;
-      if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
+      if((node = SyncMap.getNode(table, index = (table.length - 1) & hash)) != null) {
         synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
-              if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                if(Atomics.replace(SyncMap.NODE_VALUE, node.reference, value, null)) {
-                  // If the value was present or expunged and the next value
-                  // is null, remove the node and decrement the count.
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  if(current == null || current == SyncMap.EXPUNGED) return false;
+                  if(!Objects.equals(value, current)) return false;
+
+                  final Object previous = reference.compareAndExchange(current, null);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
                   if(previousNode != null) {
                     previousNode.next = node.next;
                   } else {
                     SyncMap.setNode(table, index, node.next);
                   }
 
-                  count = -1L;
+                  break retry;
                 }
-
-                break;
               }
 
               previousNode = node;
 
               if((node = node.next) == null) {
-                break;
+                return false;
               }
             }
           }
@@ -1161,40 +1174,71 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
     }
 
-    if(count != 0L) this.addCount(count);
-    return count < 0L;
+    this.addCount(-1L);
+    return true;
   }
 
   @Override
+  @SuppressWarnings("unchecked")
   public @Nullable V replace(final @NotNull K key, final @NotNull V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length;
+    Object previous;
+    retry: for(Node<K, V>[] table; ; ) {
+      Node<K, V> node = SyncMap.getNode((table = this.immutableTable), table.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
 
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
-      // Try update the node with the new value, only if it is present.
-      Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_PRESENT, value);
-    } else if(this.amended && (table = this.mutableTable) != null) {
-      length = table.length;
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current == null || current == SyncMap.EXPUNGED) return null;
 
-      // Only proceed here if the node did not exist in the immutable table.
+          previous = reference.compareAndExchange(current, value);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          break retry;
+        }
+      }
+
+      if(!this.amended || (table = this.mutableTable) == null) return null;
+
       final int index;
-      if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
+      if((node = SyncMap.getNode(table, index = (table.length - 1) & hash)) != null) {
         synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, Atomics.IS_PRESENT, value);
-                break;
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  if(current == null || current == SyncMap.EXPUNGED) return null;
+
+                  previous = reference.compareAndExchange(current, value);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
+                  break retry;
+                }
               }
 
               if((node = node.next) == null) {
-                break;
+                return null;
               }
             }
           }
@@ -1202,7 +1246,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
     }
 
-    return Sentinel.unbox(entry.previous);
+    return (V) previous;
   }
 
   @Override
@@ -1213,36 +1257,75 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final int hash = SyncMap.spread(key.hashCode());
 
-    Node<K, V>[] table = this.immutableTable; Node<K, V> node;
-    int length = table.length;
+    Object previous;
+    retry: for(Node<K, V>[] table; ; ) {
+      Node<K, V> node = SyncMap.getNode((table = this.immutableTable), table.length - 1 & hash);
+      while(node != null) {
+        final K nodeKey;
+        if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
+          node = node.next;
+          continue;
+        }
 
-    if((node = SyncMap.getNode(table, (length - 1) & hash)) != null && (node = node.find(hash, key)) != null) {
-      // Try update the node with the new value, only if it is present.
-      return Atomics.replace(SyncMap.NODE_VALUE, node.reference, oldValue, newValue);
-    } else if(this.amended && (table = this.mutableTable) != null) {
-      length = table.length;
+        final ObjectReference reference = node.reference;
+        Object current = reference.get();
+        for(; ; ) {
+          if(current == null || current == SyncMap.EXPUNGED) return false;
+          if(!Objects.equals(current, oldValue)) return false;
 
-      // Only proceed here if the node did not exist in the immutable table.
+          previous = reference.compareAndExchange(current, newValue);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          break retry;
+        }
+      }
+
+      if(!this.amended || (table = this.mutableTable) == null) return false;
+
       final int index;
-      if((node = SyncMap.getNode(table, index = (length - 1) & hash)) != null) {
+      if((node = SyncMap.getNode(table, index = (table.length - 1) & hash)) != null) {
         synchronized(node) {
           if(SyncMap.getNode(table, index) == node) {
-            do {
-              if(node.hash == hash && (node.key == key || node.key.equals(key))) {
-                return Atomics.replace(SyncMap.NODE_VALUE, node.reference, oldValue, newValue);
+            for(; ; ) {
+              final K nodeKey;
+              if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  if(current == null || current == SyncMap.EXPUNGED) return false;
+                  if(!Objects.equals(current, oldValue)) return false;
+
+                  previous = reference.compareAndExchange(current, newValue);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
+                  break retry;
+                }
               }
-            } while((node = node.next) != null);
+
+              if((node = node.next) == null) {
+                return false;
+              }
+            }
           }
         }
       }
     }
 
-    return false;
+    return true;
   }
 
   // Bulk Operations
 
   @Override
+  @SuppressWarnings("unchecked")
   public void forEach(final @NotNull BiConsumer<? super @NotNull K, ? super @NotNull V> action) {
     requireNonNull(action, "action");
 
@@ -1250,11 +1333,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final Traverser<K, V> traverser = new Traverser<>(this.immutableTable);
 
-    Node<K, V> node; V value;
+    Node<K, V> node;
     while((node = traverser.advanceNode()) != null) {
-      if((value = Sentinel.unbox(SyncMap.NODE_VALUE.getAcquire(node.reference))) != null) {
-        action.accept(node.key, value);
-      }
+      final Object current = node.reference.get();
+      if(current == null || current == SyncMap.EXPUNGED) continue;
+
+      action.accept(node.key, (V) current);
     }
   }
 
@@ -1265,11 +1349,22 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final Traverser<K, V> traverser = new Traverser<>(this.immutableTable);
 
     Node<K, V> node; long count = 0L;
-
-    final Atomics.ValueEntry entry = new Atomics.ValueEntry();
     while((node = traverser.advanceNode()) != null) {
-      Atomics.replace(entry, SyncMap.NODE_VALUE, node.reference, null);
-      if(Atomics.IS_PRESENT.test(entry.previous)) count--;
+      final ObjectReference reference = node.reference;
+      Object current = reference.get();
+      for(; ; ) {
+        if(current == null || current == SyncMap.EXPUNGED) continue;
+
+        final Object previous = reference.compareAndExchange(current, null);
+        if(previous != current) {
+          current = previous;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        count--;
+        break;
+      }
     }
 
     this.addCount(count);
@@ -1311,31 +1406,32 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * the mutable table and removes the mutable table.
    */
   /* package */ void promote() {
-    Node<K, V>[] source; OperationToken token;
+    Node<K, V>[] source;
 
-    while(this.amended
-      && (source = this.mutableTable) != null
-      && source.length > 0) {
-      // Attempt to acquire the promotion lock, or if the promotion lock has
-      // already been retrieved, break.
-      if((token = this.createToken(SyncMap.TRANSFER_PROMOTE)) != null) {
-        if(!this.amended || source != this.mutableTable) {
-          this.resetToken(token);
+    long state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    while(this.amended && (source = this.mutableTable) != null) {
+      if(state != 0L) return;
 
-          Thread.onSpinWait();
-          continue;
-        }
-
-        this.misses.reset();
-        this.amended = false;
-        this.mutableTable = null;
-        this.immutableTable = source;
-
-        this.resetToken(token);
-        break;
-      } else if(this.getToken(SyncMap.TRANSFER_PROMOTE) != null) {
-        break;
+      final long next = SyncMap.operationPack(SyncMap.ACTION_PROMOTE, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION);
+      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+      if(current != state) {
+        state = current;
+        Thread.onSpinWait();
+        continue;
       }
+
+      if(!this.amended || source != this.mutableTable) {
+        SyncMap.OPERATION_STATE.setRelease(this, 0L);
+        continue;
+      }
+
+      this.misses.reset();
+      this.amended = false;
+      this.mutableTable = null;
+      this.immutableTable = source;
+
+      SyncMap.OPERATION_STATE.setRelease(this, 0L);
+      break;
     }
   }
 
@@ -1375,75 +1471,126 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
   /* package */ void resize() {
-    Node<K, V>[] source, destination; OperationToken token;
-    int length;
+    Node<K, V>[] source, destination; int length;
 
-    while(this.amended
-      && (source = this.mutableTable) != null
-      && (length = source.length) > 0
-      && (this.size.sum() * this.loadFactor) >= length) {
-      // Attempt to acquire the resize lock, or if resize lock has already
-      // been retrieved try join the operation.
-      if((token = this.createToken(SyncMap.TRANSFER_RESIZE)) != null) {
-        // Re-check the tables exist, before we continue. If they have been
-        // removed, reset and restart the operation.
+    // Update the operation state using it as lock.
+    long state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    for(; ; ) {
+      if(!this.amended
+        || (source = this.mutableTable) == null
+        || (length = source.length) <= 0
+        || (this.size.sum() * this.loadFactor) < length) return;
+
+      final long next;
+      if(state == 0L) {
+        // Attempt to start an operation if no operation is running at all.
+        next = (SyncMap.operationPack(SyncMap.ACTION_RESIZE, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
+          | SyncMap.operationPack(SyncMap.GOAL_RUNNING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL))
+          + SyncMap.COUNT_UNIT;
+
+        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+        if(current != state) {
+          state = current;
+          Thread.onSpinWait();
+          continue;
+        }
+
         if(!this.amended || source != this.mutableTable) {
-          this.resetToken(token);
+          SyncMap.OPERATION_STATE.setRelease(this, 0L);
           continue;
         }
 
         this.transferIndex = length;
-        this.transferTable = destination = new Node[length << 1];
-      } else if((token = this.getToken(SyncMap.TRANSFER_RESIZE)) == null) {
-        // If the current operation we're looking to participate with is not
-        // running, break.
-        break;
-      } else if((destination = this.transferTable) == null) {
-        // Ensure the destination table has been created, otherwise spin.
-        Thread.onSpinWait();
-        continue;
-      }
+        this.transferTable = new Node[length << 1];
+      } else {
+        // If we did not start the operation, ensure we are going to participate
+        // in the right operation.
+        final int action = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION);
+        if(action != SyncMap.ACTION_AMEND) return;
 
-      try {
-        final boolean finalize;
-        if(this.joinToken(token)) {
-          try {
-            // Check if the state has changed once we have joined the operation.
-            // If it has, spin this back to the beginning of the loop.
-            if(this.amended
-              && source == this.mutableTable
-              && destination == this.transferTable
-              && this.transfer(source, destination, true) >= length) {
-              this.achieveToken(token);
-            }
-          } finally {
-            // Complete this thread work for the operation and store whether
-            // the task was completed.
-            finalize = this.completeToken(token);
-          }
-        } else {
-          // If we were not able to join this operation, stop trying.
-          break;
-        }
+        // Ensure we are accepting new threads to assist with the operation.
+        final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+        if(goal != SyncMap.GOAL_RUNNING) return;
 
-        // Finish the operation now that all threads have completed their work.
-        if(finalize) {
-          this.transferIndex = 0;
-          this.transferProgress = 0;
+        // Ensure we don't have too many threads trying to assist with the
+        // operation.
+        final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
+        if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) return;
 
-          this.transferTable = null;
-          this.mutableTable = destination;
+        next = state + SyncMap.COUNT_UNIT;
 
-          this.finalizeToken(token);
-        }
-
-        break;
-      } finally {
-        if(this.shouldResetToken(token)) {
-          this.resetToken(token);
+        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+        if(current != state) {
+          state = current;
+          Thread.onSpinWait();
+          continue;
         }
       }
+
+      break;
     }
+
+    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+
+    // Perform the operation.
+    final boolean achieved = (destination = this.transferTable) != null
+      && SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL) == SyncMap.GOAL_RUNNING
+      && this.transfer(source, destination, true) >= length;
+
+    // Decrement the operation count and mark it as achieved if needed.
+    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    for(; ; ) {
+      int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+      if(achieved && goal == SyncMap.GOAL_RUNNING) {
+        goal = SyncMap.GOAL_ACHIEVED;
+      }
+
+      long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT) - 1L;
+      if(count < 0L) {
+        count = 0L;
+      }
+
+      final long next = SyncMap.operationPack(SyncMap.ACTION_AMEND, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
+        | SyncMap.operationPack(goal, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL)
+        | SyncMap.operationPack(count, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
+
+      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+      if(current == state) break;
+
+      state = current;
+      Thread.onSpinWait();
+    }
+
+    // Check if this operation can be finalized and mark it as finalizing if
+    // needed.
+    final long goalMask = SyncMap.MASK_GOAL << SyncMap.SHIFT_GOAL;
+
+    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    for(; ; ) {
+      final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+      if(goal != SyncMap.GOAL_ACHIEVED) return;
+
+      final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
+      if(count != 0L) return;
+
+      final long next = (state & ~goalMask) | SyncMap.operationPack(SyncMap.GOAL_FINALIZING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+
+      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+      if(current == state) break;
+
+      state = current;
+      Thread.onSpinWait();
+    }
+
+    if((destination = this.transferTable) != null) {
+      this.transferIndex = 0;
+      this.transferProgress = 0;
+
+      this.transferTable = null;
+      this.mutableTable = destination;
+    }
+
+    SyncMap.OPERATION_STATE.setRelease(this, 0L);
   }
 
   /**
@@ -1452,75 +1599,127 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
   /* package */ void amend() {
-    Node<K, V>[] destination; OperationToken token;
+    Node<K, V>[] source, destination; int length;
 
-    while(!this.amended && this.mutableTable == null) {
-      final Node<K, V>[] source = this.immutableTable;
-      final int length = source.length;
+    // Update the operation state using it as a lock.
+    long state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    for(; ; ) {
+      if(this.amended || this.mutableTable != null) return;
 
-      // Attempt to acquire the amend lock, or if amend lock has already
-      // been retrieved try join the operation.
-      if((token = this.createToken(SyncMap.TRANSFER_AMEND)) != null) {
-        // Re-check the tables exist, before we continue. If they have been
-        // removed, reset and restart the operation.
+      source = this.immutableTable;
+      length = source.length;
+
+      final long next;
+      if(state == 0L) {
+        // Attempt to start an operation if no operation is running at all.
+        next = (SyncMap.operationPack(SyncMap.ACTION_AMEND, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
+          | SyncMap.operationPack(SyncMap.GOAL_RUNNING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL))
+          + SyncMap.COUNT_UNIT;
+
+        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+        if(current != state) {
+          state = current;
+          Thread.onSpinWait();
+          continue;
+        }
+
         if(this.amended || source != this.immutableTable || this.mutableTable != null) {
-          this.resetToken(token);
+          SyncMap.OPERATION_STATE.setRelease(this, 0L);
           continue;
         }
 
         this.transferIndex = length;
-        this.transferTable = destination = new Node[length];
-      } else if((token = this.getToken(SyncMap.TRANSFER_AMEND)) == null) {
-        // If the current operation we're looking to participate with is not
-        // running, break.
-        break;
-      } else if((destination = this.transferTable) == null) {
-        // Ensure the destination table has been created, otherwise spin.
-        Thread.onSpinWait();
-        continue;
-      }
+        this.transferTable = new Node[length];
+      } else {
+        // If we did not start the operation, ensure we are going to participate
+        // in the right operation.
+        final int action = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION);
+        if(action != SyncMap.ACTION_AMEND) return;
 
-      try {
-        final boolean finalize;
-        if(this.joinToken(token)) {
-          try {
-            // Check if the state has changed once we have joined the operation.
-            // If it has, spin this back to the beginning of the loop.
-            if(!this.amended
-              && source == this.immutableTable
-              && destination == this.transferTable
-              && this.transfer(source, destination, false) >= length) {
-              this.achieveToken(token);
-            }
-          } finally {
-            // Complete this thread work for the operation and store whether
-            // the task was completed.
-            finalize = this.completeToken(token);
-          }
-        } else {
-          // If we were not able to join this operation, stop trying.
-          break;
-        }
+        // Ensure we are accepting new threads to assist with the operation.
+        final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+        if(goal != SyncMap.GOAL_RUNNING) return;
 
-        // Finish the operation now that all threads have completed their work.
-        if(finalize) {
-          this.transferIndex = 0;
-          this.transferProgress = 0;
+        // Ensure we don't have too many threads trying to assist with the
+        // operation.
+        final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
+        if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) return;
 
-          this.transferTable = null;
-          this.mutableTable = destination;
-          this.amended = true;
+        next = state + SyncMap.COUNT_UNIT;
 
-          this.finalizeToken(token);
-        }
-
-        break;
-      } finally {
-        if(this.shouldResetToken(token)) {
-          this.resetToken(token);
+        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+        if(current != state) {
+          state = current;
+          Thread.onSpinWait();
+          continue;
         }
       }
+
+      break;
     }
+
+    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+
+    // Perform the operation.
+    final boolean achieved = (destination = this.transferTable) != null
+      && SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL) == SyncMap.GOAL_RUNNING
+      && this.transfer(source, destination, false) >= length;
+
+    // Decrement the operation count and mark it as achieved if needed.
+    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    for(; ; ) {
+      int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+      if(achieved && goal == SyncMap.GOAL_RUNNING) {
+        goal = SyncMap.GOAL_ACHIEVED;
+      }
+
+      long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT) - 1L;
+      if(count < 0L) {
+        count = 0L;
+      }
+
+      final long next = SyncMap.operationPack(SyncMap.ACTION_AMEND, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
+        | SyncMap.operationPack(goal, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL)
+        | SyncMap.operationPack(count, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
+
+      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+      if(current == state) break;
+
+      state = current;
+      Thread.onSpinWait();
+    }
+
+    // Check if this operation can be finalized and mark it as finalizing if
+    // needed.
+    final long goalMask = SyncMap.MASK_GOAL << SyncMap.SHIFT_GOAL;
+
+    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    for(; ; ) {
+      final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+      if(goal != SyncMap.GOAL_ACHIEVED) return;
+
+      final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
+      if(count != 0L) return;
+
+      final long next = (state & ~goalMask) | SyncMap.operationPack(SyncMap.GOAL_FINALIZING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
+
+      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
+      if(current == state) break;
+
+      state = current;
+      Thread.onSpinWait();
+    }
+
+    if((destination = this.transferTable) != null) {
+      this.transferIndex = 0;
+      this.transferProgress = 0;
+
+      this.transferTable = null;
+      this.mutableTable = destination;
+      this.amended = true;
+    }
+
+    SyncMap.OPERATION_STATE.setRelease(this, 0L);
   }
 
   /**
@@ -1551,7 +1750,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
       // Claim the range of indexes we are going to transfer.
       for(; ; ) {
-        if((index = (int) SyncMap.TRANSFER_INDEX.get(this)) <= 0 || finished) {
+        if((index = (int) SyncMap.TRANSFER_INDEX.getAcquire(this)) <= 0 || finished) {
           index = -1;
           break;
         } else if(SyncMap.TRANSFER_INDEX.compareAndSet(this, index, bound = (index > stride ? index - stride : 0))) {
@@ -1586,14 +1785,26 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               Node<K, V> hiHead = null, hiTail = null;
               Node<K, V> next = node;
 
-              while((node = next) != null) {
+              retry: while((node = next) != null) {
                 next = node.next;
 
-                if(!resize && (SyncMap.NODE_VALUE.getAcquire(node.reference) == Sentinel.EXPUNGED || Atomics.replace(SyncMap.NODE_VALUE, node.reference, null, Sentinel.EXPUNGED))) {
-                  continue;
+                final ObjectReference reference = node.reference;
+                if(!resize) {
+                  for(; ; ) {
+                    final Object current = reference.get();
+                    if(current == SyncMap.EXPUNGED) continue retry;
+                    if(current != null) break;
+
+                    if(!reference.expunge()) {
+                      Thread.onSpinWait();
+                      continue;
+                    }
+
+                    continue retry;
+                  }
                 }
 
-                final Node<K, V> cloned = new Node<>(node.hash, node.key, node.reference);
+                final space.vectrix.collections.SyncMap.Node<K, V> cloned = new space.vectrix.collections.SyncMap.Node<>(node.hash, node.key, node.reference);
                 if((node.hash & capacity) == 0) {
                   if(loTail == null) {
                     loHead = cloned;
@@ -1637,14 +1848,18 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
       // Now that the range has been transferred, increase the progress.
       if(delta > 0) {
+        progress = (int) SyncMap.TRANSFER_PROGRESS.getAcquire(this);
         for(; ; ) {
-          if((progress = (int) SyncMap.TRANSFER_PROGRESS.getAcquire(this)) >= capacity) break;
-          if(SyncMap.TRANSFER_PROGRESS.compareAndSet(this, progress, progress + delta)) {
+          if(progress >= capacity) break;
+
+          final int current = (int) SyncMap.TRANSFER_PROGRESS.compareAndExchangeRelease(this, progress, progress + delta);
+          if(current == progress) {
             progress += delta;
             delta = 0;
             break;
           }
 
+          progress = current;
           Thread.onSpinWait();
         }
       }
@@ -1653,27 +1868,49 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return progress;
   }
 
-  /* ------------------------- < Value Reference > ------------------------- */
+  /* ------------------------ < Object Reference > ------------------------ */
 
-  /**
-   * Represents a holder for a value that can be shared across nodes, usually
-   * when the node has been cloned.
-   *
-   * @param <T> the value type
-   */
-  @SuppressWarnings("FieldMayBeFinal")
-  /* package */ static final class ValueReference<T> {
-    private transient volatile Object value;
+  @SuppressWarnings({"FieldMayBeFinal", "FieldCanBeLocal"})
+  /* package */ static final class ObjectReference {
+    private static final VarHandle VALUE;
 
-    /* package */ ValueReference(final @Nullable T value) {
+    static {
+      try {
+        final MethodHandles.Lookup lookup = MethodHandles.lookup();
+
+        VALUE = lookup.findVarHandle(ObjectReference.class, "value", Object.class);
+      } catch(final Exception exception) {
+        throw new ExceptionInInitializerError(exception);
+      }
+    }
+
+    private Object value;
+
+    /* package */ ObjectReference(final @Nullable Object value) {
       this.value = value;
+    }
+
+    /* package */ @Nullable Object get() {
+      return ObjectReference.VALUE.getAcquire(this);
+    }
+
+    /* package */ @Nullable Object getAndSet(final @Nullable Object update) {
+      return ObjectReference.VALUE.getAndSetRelease(this, update);
+    }
+
+    /* package */ boolean expunge() {
+      return ObjectReference.VALUE.compareAndSet(this, null, SyncMap.EXPUNGED);
+    }
+
+    /* package */ @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
+      return ObjectReference.VALUE.compareAndExchangeRelease(this, expect, update);
     }
   }
 
   /* ------------------------------ < Nodes > ------------------------------ */
 
   /**
-   * Represents a key-value pair in this map with the {@link ValueReference}
+   * Represents a key-value pair in this map with the {@link ObjectReference}
    * holding the value. The key and hash would usually be set, except when
    * the node is special, the hash would be negative and the key {@code null}.
    *
@@ -1683,10 +1920,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static class Node<K, V> {
     /* package */ final int hash;
     /* package */ final K key;
-    /* package */ volatile ValueReference<V> reference;
+    /* package */ volatile ObjectReference reference;
     /* package */ volatile Node<K, V> next;
 
-    /* package */ Node(final int hash, final K key, final ValueReference<V> reference) {
+    /* package */ Node(final int hash, final @UnknownNullability K key, final @Nullable ObjectReference reference) {
       this.hash = hash;
       this.key = key;
       this.reference = reference;
@@ -1745,173 +1982,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
   }
 
-  /* ------------------------------ < Token > ------------------------------ */
-
-  /**
-   * Returns a new {@link OperationToken} if the operation was successfully
-   * started, otherwise returns {@code null}.
-   *
-   * @param operation the operation
-   * @return a new token, otherwise null
-   */
-  private @Nullable OperationToken createToken(final int operation) {
-    OperationToken token;
-    for(; ; ) {
-      if(SyncMap.OPERATION_TOKEN.getAcquire(this) != null) return null;
-      if(SyncMap.OPERATION_TOKEN.compareAndSet(this, null, token = new OperationToken(operation))) {
-        return token;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Returns the current {@link OperationToken} if it matches the given
-   * {@code operation} code, otherwise returns {@code null}.
-   *
-   * @param operation the operation
-   * @return the current token, if valid, otherwise null
-   */
-  private @Nullable OperationToken getToken(final int operation) {
-    final OperationToken token;
-    if((token = ((OperationToken) SyncMap.OPERATION_TOKEN.getAcquire(this))) != null
-      && token.operation == operation) {
-      return token;
-    }
-
-    return null;
-  }
-
-  /**
-   * Returns {@code true} if the current {@link Thread} can successfully
-   * participate in this operation, otherwise returns {@code false}.
-   *
-   * @param token the operation token
-   * @return true if joined, otherwise false
-   */
-  private boolean joinToken(final @NotNull OperationToken token) {
-    for(; ; ) {
-      final int threads = token.threads;
-      if(this.invalidToken(token) || token.state != SyncMap.STATE_IDLE || threads >= SyncMap.MAXIMUM_TRANSFER_THREADS) return false;
-      if(SyncMap.OPERATION_THREADS.compareAndSet(token, threads, threads + 1)) {
-        return true;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Marks the {@link OperationToken} with the {@link SyncMap#STATE_ACHIEVED}.
-   *
-   * @param token the token
-   */
-  private void achieveToken(final @NotNull OperationToken token) {
-    for(; ; ) {
-      if(this.invalidToken(token) || token.state != SyncMap.STATE_IDLE) return;
-      if(SyncMap.OPERATION_STATE.compareAndSet(token, SyncMap.STATE_IDLE, STATE_ACHIEVED)) {
-        return;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Returns {@code true} if the current {@link Thread} is able to complete the
-   * operation, otherwise returns {@code false}.
-   *
-   * @param token the token
-   * @return true if completed, otherwise false
-   */
-  private boolean completeToken(final @NotNull OperationToken token) {
-    int threads;
-    for(; ; ) {
-      threads = token.threads;
-      if(SyncMap.OPERATION_THREADS.compareAndSet(token, threads, threads - 1)) {
-        threads--;
-        break;
-      }
-
-      Thread.onSpinWait();
-    }
-
-    for(; ; ) {
-      final int state = token.state;
-      if(threads > 0 || state != SyncMap.STATE_ACHIEVED) return false;
-      if(SyncMap.OPERATION_STATE.compareAndSet(token, SyncMap.STATE_ACHIEVED, SyncMap.STATE_COMPLETED)) {
-        return true;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Marks the {@link OperationToken} with the {@link SyncMap#STATE_FINALIZED}.
-   *
-   * @param token the token
-   */
-  private void finalizeToken(final @NotNull OperationToken token) {
-    for(; ; ) {
-      final int state = token.state;
-      if(this.invalidToken(token) || state != SyncMap.STATE_COMPLETED) return;
-      if(SyncMap.OPERATION_STATE.compareAndSet(token, SyncMap.STATE_COMPLETED, SyncMap.STATE_FINALIZED)) {
-        break;
-      }
-
-      Thread.onSpinWait();
-    }
-  }
-
-  /**
-   * Returns {@code true} if the token should be reset, otherwise {@code false}.
-   *
-   * @param token the token
-   * @return true if it should be reset, otherwise false
-   */
-  private boolean shouldResetToken(final @NotNull OperationToken token) {
-    return !this.invalidToken(token)
-      && token.threads <= 0
-      && (token.state == SyncMap.STATE_FINALIZED || token.state == SyncMap.STATE_IDLE);
-  }
-
-  /**
-   * Resets the current operation, if the given token is valid.
-   *
-   * @param token the token
-   */
-  private void resetToken(final @NotNull OperationToken token) {
-    SyncMap.OPERATION_TOKEN.compareAndSet(this, token, null);
-  }
-
-  /**
-   * Returns {@code true} if the given token is invalid, otherwise returns
-   * {@code false}.
-   *
-   * @param token the token
-   * @return true if the token is invalid, otherwise false
-   */
-  private boolean invalidToken(final @NotNull OperationToken token) {
-    return ((OperationToken) SyncMap.OPERATION_TOKEN.getAcquire(this)) != token;
-  }
-
-  /**
-   * Represents a unique token for an operation that has been started.
-   */
-  @SuppressWarnings("unused")
-  /* package */ static final class OperationToken {
-    /* package */ final int operation;
-
-    private volatile int threads;
-    private volatile int state;
-
-    /* package */ OperationToken(final int operation) {
-      this.operation = operation;
-    }
-  }
-
   /* ---------------------------- < Iteration > ---------------------------- */
 
   /**
@@ -1953,7 +2023,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(this == other) return true;
       if(!(other instanceof final Map.Entry<?, ?> that)) return false;
       return Objects.equals(this.getKey(), that.getKey())
-          && Objects.equals(this.getValue(), that.getValue());
+        && Objects.equals(this.getValue(), that.getValue());
     }
 
     @Override
@@ -2032,16 +2102,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       SyncMap.this.remove(current.getKey(), current.getValue());
     }
 
+    @SuppressWarnings("unchecked")
     private void advanceEntry() {
       this.next = null;
 
       Node<K, V> node;
-      V value;
       while((node = this.advanceNode()) != null) {
-        if((value = Sentinel.unbox(SyncMap.NODE_VALUE.getAcquire(node.reference))) != null) {
-          this.next = new MapEntry(node.key, value);
-          break;
-        }
+        final Object current = node.reference.get();
+        if(current == null || current == SyncMap.EXPUNGED) continue;
+
+        this.next = new MapEntry(node.key, (V) current);
+        break;
       }
     }
   }

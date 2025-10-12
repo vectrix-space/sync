@@ -85,7 +85,7 @@ public class SyncMapBenchmark {
     }
 
     if(presized && (this.map instanceof final SyncMap<Integer, Integer> sync)) {
-      sync.amend();
+      sync.promote();
     }
   }
 
