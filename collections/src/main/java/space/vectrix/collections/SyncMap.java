@@ -927,14 +927,23 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        final Object previous = reference.getAndSet(value);
-        if(previous == SyncMap.EXPUNGED) {
-          this.amendNode(hash, key, reference);
-        } else if(previous != null) {
-          return (V) previous;
-        }
+        Object current = reference.get();
+        for(; ; ) {
+          final Object previous = reference.compareAndExchange(current, value);
+          if(previous != current) {
+            current = previous;
+            Thread.onSpinWait();
+            continue;
+          }
 
-        break retry;
+          if(previous == SyncMap.EXPUNGED) {
+            this.amendNode(hash, key, reference);
+          } else if(previous != null) {
+            return (V) previous;
+          }
+
+          break retry;
+        }
       }
 
       final int length, index;
@@ -956,9 +965,22 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             for(; ; ) {
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
-                final Object previous = node.reference.getAndSet(value);
-                if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
-                break retry;
+                final ObjectReference reference = node.reference;
+                Object current = reference.get();
+                for(; ; ) {
+                  final Object previous = reference.compareAndExchange(current, value);
+                  if(previous != current) {
+                    current = previous;
+                    Thread.onSpinWait();
+                    continue;
+                  }
+
+                  if(previous != null && previous != SyncMap.EXPUNGED) {
+                    return (V) previous;
+                  }
+
+                  break retry;
+                }
               }
 
               final Node<K, V> previousNode = node;
@@ -1892,10 +1914,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     /* package */ @Nullable Object get() {
       return ObjectReference.VALUE.getAcquire(this);
-    }
-
-    /* package */ @Nullable Object getAndSet(final @Nullable Object update) {
-      return ObjectReference.VALUE.getAndSetRelease(this, update);
     }
 
     /* package */ boolean expunge() {
