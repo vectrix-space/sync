@@ -394,8 +394,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     } else if(this.amended) {
       reference = this.getMutableValue(hash, key);
 
-      // Record a miss even if the node does not exist, but only if the table
-      // is amended.
       this.miss();
       return reference;
     }
@@ -490,8 +488,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         next = mappingFunction.apply(key);
         if(next == null) return null;
 
-        // Try insert a new node if it hasn't previously existed, then
-        // increment the count.
         if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(next)))) {
           break;
         }
@@ -529,8 +525,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                 next = mappingFunction.apply(key);
                 if(next == null) return null;
 
-                // If the node does not exist in this bucket, create a new
-                // node and increment the count.
                 previousNode.next = new Node<>(hash, key, new ObjectReference(next));
                 break retry;
               }
@@ -688,8 +682,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         next = remappingFunction.apply(key, null);
         if(next == null) return null;
 
-        // Try insert a new node if it hasn't previously existed, then
-        // increment the count.
         if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(next)))) {
           count = 1L;
           break;
@@ -739,8 +731,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                 next = remappingFunction.apply(key, null);
                 if(next == null) return null;
 
-                // If the node does not exist in this bucket, create a new
-                // node and increment the count.
                 previousNode.next = new Node<>(hash, key, new ObjectReference(next));
 
                 count = 1L;
@@ -797,8 +787,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutableTable == null && (mutableTable = this.mutableTable) == null) || (length = mutableTable.length) == 0) {
         this.amend();
       } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
-        // Try insert a new node if it hasn't previously existed, then
-        // increment the count.
         if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(value)))) {
           break;
         }
@@ -830,8 +818,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               final Node<K, V> previousNode = node;
               if((node = node.next) == null) {
-                // If the node does not exist in this bucket, create a new
-                // node and increment the count.
                 previousNode.next = new Node<>(hash, key, new ObjectReference(value));
                 break retry;
               }
@@ -886,8 +872,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutableTable == null && (mutableTable = this.mutableTable) == null) || (length = mutableTable.length) == 0) {
         this.amend();
       } else if((node = SyncMap.getNode(mutableTable, index = (length - 1) & hash)) == null) {
-        // Try insert a new node if it hasn't previously existed, then
-        // increment the count.
         if(SyncMap.replaceNode(mutableTable, index, new Node<>(hash, key, new ObjectReference(value)))) {
           break;
         }
@@ -921,8 +905,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               final Node<K, V> previousNode = node;
               if((node = node.next) == null) {
-                // If the node does not exist in this bucket, create a new
-                // node and increment the count.
                 previousNode.next = new Node<>(hash, key, new ObjectReference(value));
                 break retry;
               }
@@ -942,10 +924,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     for(Node<K, V> node; ; ) {
       final int length, index;
       if(!this.amended || (table == null && (table = this.mutableTable) == null) || (length = table.length) == 0) {
-        // If the mutable table has been removed, we can't proceed.
         return;
       } else if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-        // Try insert a new node if it hasn't previously existed.
         if(SyncMap.replaceNode(table, index, new Node<>(hash, key, reference))) {
           return;
         }
@@ -965,8 +945,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               final Node<K, V> previousNode = node;
               if((node = node.next) == null) {
-                // If the node does not exist in this bucket, create a new
-                // node.
                 previousNode.next = new Node<>(hash, key, reference);
                 return;
               }
@@ -1368,7 +1346,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     long stamp = this.stampLock.getAcquire();
     while(stamp == StampLock.DEFAULT_STAMP && this.amended && (source = this.mutableTable) != null) {
-      // If the stamp lock has not been acquired, try to acquire it now.
       final long next = StampLock.pack(StampLock.MODE_PROMOTE);
       final long witness = this.stampLock.compareAndExchange(stamp, next);
       if(witness != StampLock.DEFAULT_STAMP) {
@@ -1438,7 +1415,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         || (this.size.sum() * this.loadFactor) < length) return;
 
       if(stamp == StampLock.DEFAULT_STAMP) {
-        // If the stamp lock has not been acquired, try to acquire it now.
         final long next = StampLock.pack(StampLock.MODE_RESIZE);
         final long witness = this.stampLock.compareAndExchange(stamp, next);
         if(witness != StampLock.DEFAULT_STAMP) {
@@ -1456,8 +1432,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         this.transferTable = destination = new Node[length << 1];
         break;
       } else if(StampLock.modeOf(stamp) == StampLock.MODE_RESIZE && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
-        // If the stamp lock has been acquired, ensure the mode is resize and
-        // the stage is running.
         final long count = StampLock.countOf(stamp);
         if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) {
           return;
@@ -1488,7 +1462,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     if(achieved) {
       stamp = this.stampLock.getAcquire();
       for(; ; ) {
-        // If the stamp lock is no longer at the running stage break.
         if(StampLock.stageOf(stamp) != StampLock.STAGE_RUNNING) break;
 
         final long next = StampLock.withStage(stamp, StampLock.STAGE_ACHIEVED);
@@ -1558,7 +1531,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       length = source.length;
 
       if(stamp == StampLock.DEFAULT_STAMP) {
-        // If the stamp lock has not been acquired, try to acquire it now.
         final long next = StampLock.pack(StampLock.MODE_AMEND);
         final long witness = this.stampLock.compareAndExchange(stamp, next);
         if(witness != StampLock.DEFAULT_STAMP) {
@@ -1576,8 +1548,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         this.transferTable = destination = new Node[length];
         break;
       } else if(StampLock.modeOf(stamp) == StampLock.MODE_AMEND && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
-        // If the stamp lock has been acquired, ensure the mode is amend and
-        // the stage is running.
         final long count = StampLock.countOf(stamp);
         if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) {
           return;
@@ -1608,7 +1578,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     if(achieved) {
       stamp = this.stampLock.getAcquire();
       for(; ; ) {
-        // If the stamp lock is no longer at the running stage break.
         if(StampLock.stageOf(stamp) != StampLock.STAGE_RUNNING) break;
 
         final long next = StampLock.withStage(stamp, StampLock.STAGE_ACHIEVED);
@@ -1689,7 +1658,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node<K, V> node;
       int index, bound = 0;
 
-      // Claim the range of indexes we are going to transfer.
       for(; ; ) {
         if((index = (int) SyncMap.TRANSFER_INDEX.getAcquire(this)) <= 0 || finished) {
           index = -1;
@@ -1702,8 +1670,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         Thread.onSpinWait();
       }
 
-      // Start iterating the nodes in the range that was claimed and move them
-      // to the destination table.
       boolean advance = false;
       for(int i = index - 1; ; ) {
         if(i < 0 || i >= capacity || (resize && (i + capacity >= nextCapacity))) {
@@ -1787,7 +1753,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         if(advance) i--;
       }
 
-      // Now that the range has been transferred, increase the progress.
       if(delta > 0) {
         progress = (int) SyncMap.TRANSFER_PROGRESS.getAcquire(this);
         for(; ; ) {
@@ -1811,6 +1776,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   /* --------------------------- < Stamp Lock > --------------------------- */
 
+  /**
+   * Represents a stamped lock for doing bulk map operations such as promoting,
+   * resizing, and amending.
+   */
   /* package */ static final class StampLock {
     /* package */ static final long DEFAULT_STAMP = 0L;
 
@@ -1843,25 +1812,57 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     /* package */ static final long ONE_COUNT = 1L << StampLock.SHIFT_COUNT;
 
-    private static long pack(final int mode) {
+    /**
+     * Returns a packed {@code long} stamp with the given mode, running stage,
+     * and thread count of {@code 1}.
+     *
+     * @param mode the mode
+     * @return the packed stamp
+     */
+    /* package */ static long pack(final int mode) {
       return ((long) mode & 7L) << StampLock.SHIFT_MODE
         | ((long) StampLock.STAGE_RUNNING & 7L) << StampLock.SHIFT_STAGE
         | 1L << StampLock.SHIFT_COUNT;
     }
 
-    private static int modeOf(final long stamp) {
+    /**
+     * Returns the mode from the packed stamp.
+     *
+     * @param stamp the packed stamp
+     * @return the mode
+     */
+    /* package */ static int modeOf(final long stamp) {
       return (int) ((stamp >>> StampLock.SHIFT_MODE) & StampLock.MASK_MODE);
     }
 
-    private static int stageOf(final long stamp) {
+    /**
+     * Returns the stage from the packed stamp.
+     *
+     * @param stamp the packed stamp
+     * @return the stage
+     */
+    /* package */ static int stageOf(final long stamp) {
       return (int) ((stamp >>> StampLock.SHIFT_STAGE) & StampLock.MASK_STAGE);
     }
 
-    private static long countOf(final long stamp) {
+    /**
+     * Returns the count from the packet stamp.
+     *
+     * @param stamp the packed stamp
+     * @return the count
+     */
+    /* package */ static long countOf(final long stamp) {
       return stamp >>> StampLock.SHIFT_COUNT;
     }
 
-    private static long withStage(final long stamp, final int newStage) {
+    /**
+     * Returns the packed stamp with the given stage applied.
+     *
+     * @param stamp the packed stamp
+     * @param newStage the new stage
+     * @return the packed stamp, with the new stage
+     */
+    /* package */ static long withStage(final long stamp, final int newStage) {
       final long stageMask = StampLock.MASK_STAGE << StampLock.SHIFT_STAGE;
       return (stamp & ~stageMask) | (((long) newStage & 7L) << StampLock.SHIFT_STAGE);
     }
@@ -1900,6 +1901,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   /* ------------------------ < Object Reference > ------------------------ */
 
+  /**
+   * Represents a value holder for sharing across nodes in the immutable and
+   * mutable tables, providing atomic updates for the underlying value.
+   */
   @SuppressWarnings({"FieldMayBeFinal", "FieldCanBeLocal"})
   /* package */ static final class ObjectReference {
     private static final VarHandle VALUE;

@@ -51,7 +51,6 @@ import org.openjdk.jmh.infra.Blackhole;
 @Fork(1)
 @Warmup(iterations = 5)
 @Measurement(iterations = 5)
-@Threads(16)
 public class SyncMapBenchmark {
   private static final int SIZE = 100_000;
 
