@@ -116,39 +116,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   /* package */ static final Object EXPUNGED = new Object();
 
-  /*
-   * Operation actions for bulk table updates.
-   */
-  /* package */ static final int ACTION_PROMOTE = 1;
-  /* package */ static final int ACTION_RESIZE = 2;
-  /* package */ static final int ACTION_AMEND = 3;
-
-  /*
-   * Operation goal for bulk table updates.
-   */
-  /* package */ static final int GOAL_RUNNING = 1;
-  /* package */ static final int GOAL_ACHIEVED = 2;
-  /* package */ static final int GOAL_FINALIZING = 3;
-
-  /*
-   * Shift for the operation state.
-   */
-  /* package */ static final int SHIFT_ACTION = 0;
-  /* package */ static final int SHIFT_GOAL = 2;
-  /* package */ static final int SHIFT_COUNT = 4;
-
-  /*
-   * Mask for the operation state.
-   */
-  /* package */ static final long MASK_ACTION = 0b11;
-  /* package */ static final long MASK_GOAL = 0b11;
-  /* package */ static final long MASK_COUNT = (1L << 60) - 1L;
-
-  /*
-   * Unit for the operation state.
-   */
-  /* package */ static final long COUNT_UNIT = 1L << SyncMap.SHIFT_COUNT;
-
   /**
    * Represents the maximum number of processors for transfer size limits.
    */
@@ -183,41 +150,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return length <= 0 ? 1 : (length >= SyncMap.MAXIMUM_CAPACITY ? SyncMap.MAXIMUM_CAPACITY : length + 1);
   }
 
-  /**
-   * Packs the value into the operation state.
-   *
-   * @param value the value
-   * @param shift the value shift
-   * @param mask the value mask
-   * @return the packed value
-   */
-  /* package */ static long operationPack(final long value, final int shift, final long mask) {
-    return (value & mask) << shift;
-  }
-
-  /**
-   * Extracts the value from this operation state.
-   *
-   * @param value the operation state
-   * @param shift the value shift
-   * @param mask the value mask
-   * @return the value
-   */
-  /* package */ static long operationExtract(final long value, final int shift, final long mask) {
-    return (value >>> shift) & mask;
-  }
-
   /* ---------------------------- < Reflection > ---------------------------- */
 
   /**
    * Provides atomic operations for {@link Node} tables.
    */
   /* package */ static final VarHandle NODE_ARRAY;
-
-  /**
-   * Provides atomic operations for {@link SyncMap#operationState}.
-   */
-  /* package */ static final VarHandle OPERATION_STATE;
 
   /**
    * Provides atomic operations for {@link SyncMap#transferIndex}.
@@ -234,7 +172,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       final MethodHandles.Lookup lookup = MethodHandles.lookup();
 
       NODE_ARRAY = MethodHandles.arrayElementVarHandle(Node[].class);
-      OPERATION_STATE = lookup.findVarHandle(SyncMap.class, "operationState", long.class);
       TRANSFER_INDEX = lookup.findVarHandle(SyncMap.class, "transferIndex", int.class);
       TRANSFER_PROGRESS = lookup.findVarHandle(SyncMap.class, "transferProgress", int.class);
     } catch(final Exception exception) {
@@ -318,12 +255,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   private transient volatile boolean amended;
 
   /**
-   * Represents the operation state for a bulk operation.
-   */
-  @SuppressWarnings("unused")
-  private transient volatile long operationState;
-
-  /**
    * Represents the transfer index a thread may claim a range of when
    * participating in a transfer operation.
    */
@@ -333,6 +264,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents the transfer progress threads will add completed ranges to.
    */
   private transient volatile int transferProgress;
+
+  /**
+   * Represents the stamp lock for the bulk operations on the table.
+   */
+  private transient final StampLock stampLock = new StampLock();
 
   /**
    * Represents the amount of times the immutable cache has been missed for
@@ -1430,20 +1366,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ void promote() {
     Node<K, V>[] source;
 
-    long state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-    while(this.amended && (source = this.mutableTable) != null) {
-      if(state != 0L) return;
-
-      final long next = SyncMap.operationPack(SyncMap.ACTION_PROMOTE, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION);
-      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-      if(current != state) {
-        state = current;
+    long stamp = this.stampLock.getAcquire();
+    while(stamp == StampLock.DEFAULT_STAMP && this.amended && (source = this.mutableTable) != null) {
+      // If the stamp lock has not been acquired, try to acquire it now.
+      final long next = StampLock.pack(StampLock.MODE_PROMOTE);
+      final long witness = this.stampLock.compareAndExchange(stamp, next);
+      if(witness != StampLock.DEFAULT_STAMP) {
+        stamp = witness;
         Thread.onSpinWait();
         continue;
       }
 
       if(!this.amended || source != this.mutableTable) {
-        SyncMap.OPERATION_STATE.setRelease(this, 0L);
+        this.stampLock.reset();
         continue;
       }
 
@@ -1452,7 +1387,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       this.mutableTable = null;
       this.immutableTable = source;
 
-      SyncMap.OPERATION_STATE.setRelease(this, 0L);
+      this.stampLock.reset();
       break;
     }
   }
@@ -1495,124 +1430,116 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ void resize() {
     Node<K, V>[] source, destination; int length;
 
-    // Update the operation state using it as lock.
-    long state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    long stamp = this.stampLock.getAcquire();
     for(; ; ) {
       if(!this.amended
         || (source = this.mutableTable) == null
         || (length = source.length) <= 0
         || (this.size.sum() * this.loadFactor) < length) return;
 
-      final long next;
-      if(state == 0L) {
-        // Attempt to start an operation if no operation is running at all.
-        next = (SyncMap.operationPack(SyncMap.ACTION_RESIZE, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
-          | SyncMap.operationPack(SyncMap.GOAL_RUNNING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL))
-          + SyncMap.COUNT_UNIT;
-
-        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-        if(current != state) {
-          state = current;
+      if(stamp == StampLock.DEFAULT_STAMP) {
+        // If the stamp lock has not been acquired, try to acquire it now.
+        final long next = StampLock.pack(StampLock.MODE_RESIZE);
+        final long witness = this.stampLock.compareAndExchange(stamp, next);
+        if(witness != StampLock.DEFAULT_STAMP) {
+          stamp = witness;
           Thread.onSpinWait();
           continue;
         }
 
         if(!this.amended || source != this.mutableTable) {
-          SyncMap.OPERATION_STATE.setRelease(this, 0L);
+          this.stampLock.reset();
           continue;
         }
 
         this.transferIndex = length;
-        this.transferTable = new Node[length << 1];
-      } else {
-        // If we did not start the operation, ensure we are going to participate
-        // in the right operation.
-        final int action = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION);
-        if(action != SyncMap.ACTION_AMEND) return;
+        this.transferTable = destination = new Node[length << 1];
+        break;
+      } else if(StampLock.modeOf(stamp) == StampLock.MODE_RESIZE && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
+        // If the stamp lock has been acquired, ensure the mode is resize and
+        // the stage is running.
+        final long count = StampLock.countOf(stamp);
+        if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) {
+          return;
+        }
 
-        // Ensure we are accepting new threads to assist with the operation.
-        final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-        if(goal != SyncMap.GOAL_RUNNING) return;
-
-        // Ensure we don't have too many threads trying to assist with the
-        // operation.
-        final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
-        if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) return;
-
-        next = state + SyncMap.COUNT_UNIT;
-
-        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-        if(current != state) {
-          state = current;
+        if((destination = this.transferTable) == null) {
           Thread.onSpinWait();
           continue;
         }
+
+        final long next = stamp + StampLock.ONE_COUNT;
+        final long witness = this.stampLock.compareAndExchange(stamp, next);
+        if(witness != stamp) {
+          stamp = witness;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        break;
+      }
+
+      return;
+    }
+
+    stamp = this.stampLock.getAcquire();
+
+    final boolean achieved = StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING && this.transfer(source, destination, true) >= length;
+    if(achieved) {
+      stamp = this.stampLock.getAcquire();
+      for(; ; ) {
+        // If the stamp lock is no longer at the running stage break.
+        if(StampLock.stageOf(stamp) != StampLock.STAGE_RUNNING) break;
+
+        final long next = StampLock.withStage(stamp, StampLock.STAGE_ACHIEVED);
+        final long witness = this.stampLock.compareAndExchange(stamp, next);
+        if(witness != stamp) {
+          stamp = witness;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        break;
+      }
+    }
+
+    stamp = this.stampLock.getAcquire();
+    for(; ; ) {
+      long next = stamp;
+
+      long count = StampLock.countOf(stamp);
+      if(count == 0L) return;
+
+      count -= 1L;
+      next -= StampLock.ONE_COUNT;
+
+      final int stage = StampLock.stageOf(stamp);
+      if(stage == StampLock.STAGE_FINALIZING) return;
+
+      final boolean finalize = (stage == StampLock.STAGE_ACHIEVED && count == 0);
+      if(finalize) {
+        next = StampLock.withStage(next, StampLock.STAGE_FINALIZING);
+      }
+
+      final long witness = this.stampLock.compareAndExchange(stamp, next);
+      if(witness != stamp) {
+        stamp = witness;
+        Thread.onSpinWait();
+        continue;
+      }
+
+      if(finalize) {
+        this.transferIndex = 0;
+        this.transferProgress = 0;
+
+        this.transferTable = null;
+        this.mutableTable = destination;
+
+        this.stampLock.reset();
       }
 
       break;
     }
-
-    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-
-    // Perform the operation.
-    final boolean achieved = (destination = this.transferTable) != null
-      && SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL) == SyncMap.GOAL_RUNNING
-      && this.transfer(source, destination, true) >= length;
-
-    // Decrement the operation count and mark it as achieved if needed.
-    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-    for(; ; ) {
-      int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-      if(achieved && goal == SyncMap.GOAL_RUNNING) {
-        goal = SyncMap.GOAL_ACHIEVED;
-      }
-
-      long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT) - 1L;
-      if(count < 0L) {
-        count = 0L;
-      }
-
-      final long next = SyncMap.operationPack(SyncMap.ACTION_AMEND, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
-        | SyncMap.operationPack(goal, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL)
-        | SyncMap.operationPack(count, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
-
-      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-      if(current == state) break;
-
-      state = current;
-      Thread.onSpinWait();
-    }
-
-    // Check if this operation can be finalized and mark it as finalizing if
-    // needed.
-    final long goalMask = SyncMap.MASK_GOAL << SyncMap.SHIFT_GOAL;
-
-    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-    for(; ; ) {
-      final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-      if(goal != SyncMap.GOAL_ACHIEVED) return;
-
-      final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
-      if(count != 0L) return;
-
-      final long next = (state & ~goalMask) | SyncMap.operationPack(SyncMap.GOAL_FINALIZING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-
-      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-      if(current == state) break;
-
-      state = current;
-      Thread.onSpinWait();
-    }
-
-    if((destination = this.transferTable) != null) {
-      this.transferIndex = 0;
-      this.transferProgress = 0;
-
-      this.transferTable = null;
-      this.mutableTable = destination;
-    }
-
-    SyncMap.OPERATION_STATE.setRelease(this, 0L);
   }
 
   /**
@@ -1623,125 +1550,117 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ void amend() {
     Node<K, V>[] source, destination; int length;
 
-    // Update the operation state using it as a lock.
-    long state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
+    long stamp = this.stampLock.getAcquire();
     for(; ; ) {
       if(this.amended || this.mutableTable != null) return;
 
       source = this.immutableTable;
       length = source.length;
 
-      final long next;
-      if(state == 0L) {
-        // Attempt to start an operation if no operation is running at all.
-        next = (SyncMap.operationPack(SyncMap.ACTION_AMEND, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
-          | SyncMap.operationPack(SyncMap.GOAL_RUNNING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL))
-          + SyncMap.COUNT_UNIT;
-
-        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-        if(current != state) {
-          state = current;
+      if(stamp == StampLock.DEFAULT_STAMP) {
+        // If the stamp lock has not been acquired, try to acquire it now.
+        final long next = StampLock.pack(StampLock.MODE_AMEND);
+        final long witness = this.stampLock.compareAndExchange(stamp, next);
+        if(witness != StampLock.DEFAULT_STAMP) {
+          stamp = witness;
           Thread.onSpinWait();
           continue;
         }
 
         if(this.amended || source != this.immutableTable || this.mutableTable != null) {
-          SyncMap.OPERATION_STATE.setRelease(this, 0L);
+          this.stampLock.reset();
           continue;
         }
 
         this.transferIndex = length;
-        this.transferTable = new Node[length];
-      } else {
-        // If we did not start the operation, ensure we are going to participate
-        // in the right operation.
-        final int action = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION);
-        if(action != SyncMap.ACTION_AMEND) return;
+        this.transferTable = destination = new Node[length];
+        break;
+      } else if(StampLock.modeOf(stamp) == StampLock.MODE_AMEND && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
+        // If the stamp lock has been acquired, ensure the mode is amend and
+        // the stage is running.
+        final long count = StampLock.countOf(stamp);
+        if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) {
+          return;
+        }
 
-        // Ensure we are accepting new threads to assist with the operation.
-        final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-        if(goal != SyncMap.GOAL_RUNNING) return;
-
-        // Ensure we don't have too many threads trying to assist with the
-        // operation.
-        final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
-        if(count >= SyncMap.MAXIMUM_TRANSFER_THREADS) return;
-
-        next = state + SyncMap.COUNT_UNIT;
-
-        final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-        if(current != state) {
-          state = current;
+        if((destination = this.transferTable) == null) {
           Thread.onSpinWait();
           continue;
         }
+
+        final long next = stamp + StampLock.ONE_COUNT;
+        final long witness = this.stampLock.compareAndExchange(stamp, next);
+        if(witness != stamp) {
+          stamp = witness;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        break;
+      }
+
+      return;
+    }
+
+    stamp = this.stampLock.getAcquire();
+
+    final boolean achieved = StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING && this.transfer(source, destination, false) >= length;
+    if(achieved) {
+      stamp = this.stampLock.getAcquire();
+      for(; ; ) {
+        // If the stamp lock is no longer at the running stage break.
+        if(StampLock.stageOf(stamp) != StampLock.STAGE_RUNNING) break;
+
+        final long next = StampLock.withStage(stamp, StampLock.STAGE_ACHIEVED);
+        final long witness = this.stampLock.compareAndExchange(stamp, next);
+        if(witness != stamp) {
+          stamp = witness;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        break;
+      }
+    }
+
+    stamp = this.stampLock.getAcquire();
+    for(; ; ) {
+      long next = stamp;
+
+      long count = StampLock.countOf(stamp);
+      if(count == 0L) return;
+
+      count -= 1L;
+      next -= StampLock.ONE_COUNT;
+
+      final int stage = StampLock.stageOf(stamp);
+      if(stage == StampLock.STAGE_FINALIZING) return;
+
+      final boolean finalize = (stage == StampLock.STAGE_ACHIEVED && count == 0);
+      if(finalize) {
+        next = StampLock.withStage(next, StampLock.STAGE_FINALIZING);
+      }
+
+      final long witness = this.stampLock.compareAndExchange(stamp, next);
+      if(witness != stamp) {
+        stamp = witness;
+        Thread.onSpinWait();
+        continue;
+      }
+
+      if(finalize) {
+        this.transferIndex = 0;
+        this.transferProgress = 0;
+
+        this.transferTable = null;
+        this.mutableTable = destination;
+        this.amended = true;
+
+        this.stampLock.reset();
       }
 
       break;
     }
-
-    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-
-    // Perform the operation.
-    final boolean achieved = (destination = this.transferTable) != null
-      && SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL) == SyncMap.GOAL_RUNNING
-      && this.transfer(source, destination, false) >= length;
-
-    // Decrement the operation count and mark it as achieved if needed.
-    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-    for(; ; ) {
-      int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-      if(achieved && goal == SyncMap.GOAL_RUNNING) {
-        goal = SyncMap.GOAL_ACHIEVED;
-      }
-
-      long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT) - 1L;
-      if(count < 0L) {
-        count = 0L;
-      }
-
-      final long next = SyncMap.operationPack(SyncMap.ACTION_AMEND, SyncMap.SHIFT_ACTION, SyncMap.MASK_ACTION)
-        | SyncMap.operationPack(goal, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL)
-        | SyncMap.operationPack(count, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
-
-      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-      if(current == state) break;
-
-      state = current;
-      Thread.onSpinWait();
-    }
-
-    // Check if this operation can be finalized and mark it as finalizing if
-    // needed.
-    final long goalMask = SyncMap.MASK_GOAL << SyncMap.SHIFT_GOAL;
-
-    state = (long) SyncMap.OPERATION_STATE.getAcquire(this);
-    for(; ; ) {
-      final int goal = (int) SyncMap.operationExtract(state, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-      if(goal != SyncMap.GOAL_ACHIEVED) return;
-
-      final long count = SyncMap.operationExtract(state, SyncMap.SHIFT_COUNT, SyncMap.MASK_COUNT);
-      if(count != 0L) return;
-
-      final long next = (state & ~goalMask) | SyncMap.operationPack(SyncMap.GOAL_FINALIZING, SyncMap.SHIFT_GOAL, SyncMap.MASK_GOAL);
-
-      final long current = (long) SyncMap.OPERATION_STATE.compareAndExchangeRelease(this, state, next);
-      if(current == state) break;
-
-      state = current;
-      Thread.onSpinWait();
-    }
-
-    if((destination = this.transferTable) != null) {
-      this.transferIndex = 0;
-      this.transferProgress = 0;
-
-      this.transferTable = null;
-      this.mutableTable = destination;
-      this.amended = true;
-    }
-
-    SyncMap.OPERATION_STATE.setRelease(this, 0L);
   }
 
   /**
@@ -1888,6 +1807,95 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     return progress;
+  }
+
+  /* --------------------------- < Stamp Lock > --------------------------- */
+
+  /* package */ static final class StampLock {
+    /* package */ static final long DEFAULT_STAMP = 0L;
+
+    /*
+     * Stamp mode for bulk table updates.
+     */
+    /* package */ static final int MODE_PROMOTE = 1;
+    /* package */ static final int MODE_RESIZE = 2;
+    /* package */ static final int MODE_AMEND = 3;
+
+    /*
+     * Stamp stage for bulk table updates.
+     */
+    /* package */ static final int STAGE_RUNNING = 1;
+    /* package */ static final int STAGE_ACHIEVED = 2;
+    /* package */ static final int STAGE_FINALIZING = 3;
+
+    /*
+     * Shift for the stamp.
+     */
+    /* package */ static final int SHIFT_MODE = 0;
+    /* package */ static final int SHIFT_STAGE = 3;
+    /* package */ static final int SHIFT_COUNT = 6;
+
+    /*
+     * Mask for the stamp.
+     */
+    /* package */ static final long MASK_MODE = 0b111;
+    /* package */ static final long MASK_STAGE = 0b111;
+
+    /* package */ static final long ONE_COUNT = 1L << StampLock.SHIFT_COUNT;
+
+    private static long pack(final int mode) {
+      return ((long) mode & 7L) << StampLock.SHIFT_MODE
+        | ((long) StampLock.STAGE_RUNNING & 7L) << StampLock.SHIFT_STAGE
+        | 1L << StampLock.SHIFT_COUNT;
+    }
+
+    private static int modeOf(final long stamp) {
+      return (int) ((stamp >>> StampLock.SHIFT_MODE) & StampLock.MASK_MODE);
+    }
+
+    private static int stageOf(final long stamp) {
+      return (int) ((stamp >>> StampLock.SHIFT_STAGE) & StampLock.MASK_STAGE);
+    }
+
+    private static long countOf(final long stamp) {
+      return stamp >>> StampLock.SHIFT_COUNT;
+    }
+
+    private static long withStage(final long stamp, final int newStage) {
+      final long stageMask = StampLock.MASK_STAGE << StampLock.SHIFT_STAGE;
+      return (stamp & ~stageMask) | (((long) newStage & 7L) << StampLock.SHIFT_STAGE);
+    }
+
+    private static final VarHandle STAMP;
+
+    static {
+      try {
+        final MethodHandles.Lookup lookup = MethodHandles.lookup();
+
+        STAMP = lookup.findVarHandle(StampLock.class, "stamp", long.class);
+      } catch(final Exception exception) {
+        throw new ExceptionInInitializerError(exception);
+      }
+    }
+
+    @SuppressWarnings({"FieldCanBeLocal", "FieldMayBeFinal"})
+    private long stamp;
+
+    /* package */ StampLock() {
+      this.stamp = StampLock.DEFAULT_STAMP;
+    }
+
+    /* package */ long getAcquire() {
+      return (long) StampLock.STAMP.getAcquire(this);
+    }
+
+    /* package */ long compareAndExchange(final long expect, final long update) {
+      return (long) StampLock.STAMP.compareAndExchangeRelease(this, expect, update);
+    }
+
+    /* package */ void reset() {
+      StampLock.STAMP.setRelease(this, StampLock.DEFAULT_STAMP);
+    }
   }
 
   /* ------------------------ < Object Reference > ------------------------ */

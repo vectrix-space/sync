@@ -46,7 +46,7 @@ dependencies {
 
 ## Performance
 
-The benchmarks below were recorded on a _M4 Mac Pro_.
+The benchmarks below were recorded on a _M4 Macbook Pro_.
 
 - [SyncMap Benchmarks](benchmarks.md#syncmap)
 
