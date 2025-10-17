@@ -33,7 +33,6 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
@@ -48,7 +47,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Represents a hash table capable of highly concurrent retrievals and updates.
- * It works similarly to {@link ConcurrentHashMap} and
+ * It works similarly to {@link java.util.concurrent.ConcurrentHashMap} and
  * shares many of the same concepts. However, the main difference is with how
  * this map carefully manages two separate tables. One table is immutable
  * providing efficient retrieval and updates of existing and frequently
@@ -58,7 +57,7 @@ import static java.util.Objects.requireNonNull;
  * <p>This map is optimized for cases where updates and retrievals for existing
  * entries is a lot faster than recently added entries. However, the
  * performance in other cases are close or equal to that of {@link
- * ConcurrentHashMap} which is faster than a traditional
+ * java.util.concurrent.ConcurrentHashMap} which is faster than a traditional
  * map paired with a read and write lock, or maps with an exclusive lock (such
  * as using {@link Collections#synchronizedMap(Map)}) in similar scenarios.</p>
  *
