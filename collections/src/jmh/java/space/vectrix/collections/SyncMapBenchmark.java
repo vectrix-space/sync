@@ -35,6 +35,7 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
+import org.openjdk.jmh.annotations.OperationsPerInvocation;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
@@ -45,18 +46,16 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 @BenchmarkMode(Mode.Throughput)
-@OutputTimeUnit(TimeUnit.MILLISECONDS)
+@OutputTimeUnit(TimeUnit.NANOSECONDS)
 @State(Scope.Benchmark)
 @Fork(1)
 @Warmup(iterations = 5)
 @Measurement(iterations = 5)
-@Threads(16)
 public class SyncMapBenchmark {
+  private static final int SIZE = 100_000;
+
   @Param({ "SyncMap", "SynchronizedMap", "ConcurrentHashMap" })
   private String implementation;
-
-  @Param("100000")
-  private int size;
 
   @Param({ "none", "presize", "prepopulate" })
   private String mode;
@@ -69,46 +68,49 @@ public class SyncMapBenchmark {
     final boolean prepopulate = "prepopulate".equalsIgnoreCase(this.mode);
 
     if ("SyncMap".equalsIgnoreCase(this.implementation)) {
-      this.map = presized ? new SyncMap<>(this.size) : new SyncMap<>();
+      this.map = presized ? new SyncMap<>(SyncMapBenchmark.SIZE) : new SyncMap<>();
     } else if ("SynchronizedMap".equalsIgnoreCase(this.implementation)) {
       this.map = presized
-        ? Collections.synchronizedMap(new HashMap<>(this.size))
+        ? Collections.synchronizedMap(new HashMap<>(SyncMapBenchmark.SIZE))
         : Collections.synchronizedMap(new HashMap<>());
     } else if ("ConcurrentHashMap".equalsIgnoreCase(this.implementation)) {
-      this.map = presized ? new ConcurrentHashMap<>(this.size) : new ConcurrentHashMap<>();
+      this.map = presized ? new ConcurrentHashMap<>(SyncMapBenchmark.SIZE) : new ConcurrentHashMap<>();
     }
 
     if(prepopulate) {
-      for(int i = 0; i < this.size; i++) {
+      for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
         this.map.put(i, i);
       }
+    }
 
-      for(int i = 0; i < this.size; i++) {
-        this.map.get(i);
-      }
+    if(presized && (this.map instanceof final SyncMap<Integer, Integer> sync)) {
+      sync.promote();
     }
   }
 
   @Benchmark
   @Threads(8)
+  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
   public void getOnly(final Blackhole blackhole) {
-    for(int i = 0; i < this.size; i++) {
+    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
       blackhole.consume(this.map.get(i));
     }
   }
 
   @Benchmark
   @Threads(8)
+  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
   public void putOnly(final Blackhole blackhole) {
-    for(int i = 0; i < this.size; i++) {
+    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
       blackhole.consume(this.map.put(i, i));
     }
   }
 
   @Benchmark
   @Threads(8)
+  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
   public void putAndGet(final Blackhole blackhole) {
-    for(int i = 0; i < this.size; i++) {
+    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
       blackhole.consume(this.map.put(i, i));
       blackhole.consume(this.map.get(i));
     }
@@ -116,10 +118,11 @@ public class SyncMapBenchmark {
 
   @Benchmark
   @Threads(8)
+  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
   public void randomPutAndGet(final Blackhole blackhole) {
     final Random random = new Random(8);
-    for(int i = 0; i < this.size; i++) {
-      final int key = random.nextInt(this.size);
+    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
+      final int key = random.nextInt(SyncMapBenchmark.SIZE);
       if(random.nextBoolean()) {
         blackhole.consume(this.map.put(key, key));
       } else {
