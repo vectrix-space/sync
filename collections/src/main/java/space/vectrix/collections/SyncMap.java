@@ -458,21 +458,21 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        Object current = reference.get();
+        Object previous = reference.get();
         for(; ; ) {
-          if(current != null && current != SyncMap.EXPUNGED) return (V) current;
+          if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
 
           next = mappingFunction.apply(key);
           if(next == null) return null;
 
-          final Object previous = reference.compareAndExchange(current, next);
-          if(previous != current) {
-            current = previous;
+          final Object witness = reference.compareAndExchange(previous, next);
+          if(witness != previous) {
+            previous = witness;
             Thread.onSpinWait();
             continue;
           }
 
-          if(previous == SyncMap.EXPUNGED) {
+          if(witness == SyncMap.EXPUNGED) {
             this.amendNode(hash, key, reference);
           }
 
@@ -501,16 +501,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.reference;
-                Object current = reference.get();
+                Object previous = reference.get();
                 for(; ; ) {
-                  if(current != null && current != SyncMap.EXPUNGED) return (V) current;
+                  if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
 
                   next = mappingFunction.apply(key);
                   if(next == null) return null;
 
-                  final Object previous = reference.compareAndExchange(current, next);
-                  if (previous != current) {
-                    current = previous;
+                  final Object witness = reference.compareAndExchange(previous, next);
+                  if(witness != previous) {
+                    previous = witness;
                     Thread.onSpinWait();
                     continue;
                   }
@@ -556,14 +556,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        Object current = reference.get();
+        Object previous = reference.get();
         for(; ; ) {
-          if(current == null || current == SyncMap.EXPUNGED) return null;
-          next = remappingFunction.apply(key, (V) current);
+          if(previous == null || previous == SyncMap.EXPUNGED) return null;
+          next = remappingFunction.apply(key, (V) previous);
 
-          final Object previous = reference.compareAndExchange(current, next);
-          if(previous != current) {
-            current = previous;
+          final Object witness = reference.compareAndExchange(previous, next);
+          if(witness != previous) {
+            previous = witness;
             Thread.onSpinWait();
             continue;
           }
@@ -586,14 +586,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.reference;
-                Object current = reference.get();
+                Object previous = reference.get();
                 for(; ; ) {
-                  if(current == null || current == SyncMap.EXPUNGED) return null;
-                  next = remappingFunction.apply(key, (V) current);
+                  if(previous == null || previous == SyncMap.EXPUNGED) return null;
+                  next = remappingFunction.apply(key, (V) previous);
 
-                  final Object previous = reference.compareAndExchange(current, next);
-                  if(previous != current) {
-                    current = previous;
+                  final Object witness = reference.compareAndExchange(previous, next);
+                  if(witness != previous) {
+                    previous = witness;
                     Thread.onSpinWait();
                     continue;
                   }
@@ -646,22 +646,22 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        Object current = reference.get();
+        Object previous = reference.get();
         for(; ; ) {
-          next = remappingFunction.apply(key, current == SyncMap.EXPUNGED ? null : (V) current);
-          if(next == null && (current == null || current == SyncMap.EXPUNGED)) return null;
+          next = remappingFunction.apply(key, previous == SyncMap.EXPUNGED ? null : (V) previous);
+          if(next == null && (previous == null || previous == SyncMap.EXPUNGED)) return null;
 
-          final Object previous = reference.compareAndExchange(current, next);
-          if(previous != current) {
-            current = previous;
+          final Object witness = reference.compareAndExchange(previous, next);
+          if(witness != previous) {
+            previous = witness;
             Thread.onSpinWait();
             continue;
           }
 
           if(next != null) {
-            if(previous == null) {
+            if(witness == null) {
               count = 1L;
-            } else if(previous == SyncMap.EXPUNGED) {
+            } else if(witness == SyncMap.EXPUNGED) {
               this.amendNode(hash, key, reference);
 
               count = 1L;
@@ -696,21 +696,21 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.reference;
-                Object current = reference.get();
+                Object previous = reference.get();
                 for(; ; ) {
-                  next = remappingFunction.apply(key, current == SyncMap.EXPUNGED ? null : (V) current);
-                  if(next == null && (current == null || current == SyncMap.EXPUNGED)) return null;
+                  next = remappingFunction.apply(key, previous == SyncMap.EXPUNGED ? null : (V) previous);
+                  if(next == null && (previous == null || previous == SyncMap.EXPUNGED)) return null;
 
-                  final Object previous = reference.compareAndExchange(current, next);
-                  if(previous != current) {
-                    current = previous;
+                  final Object witness = reference.compareAndExchange(previous, next);
+                  if(witness != previous) {
+                    previous = witness;
                     Thread.onSpinWait();
                     continue;
                   }
 
-                  if(next != null && (previous == null || previous == SyncMap.EXPUNGED)) {
+                  if(next != null && (witness == null || witness == SyncMap.EXPUNGED)) {
                     count = 1L;
-                  } else if(next == null && (previous != null && previous != SyncMap.EXPUNGED)) {
+                  } else if(next == null && (witness != null && witness != SyncMap.EXPUNGED)) {
                     if(previousNode != null) {
                       previousNode.next = node.next;
                     } else {
@@ -763,18 +763,18 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        Object current = reference.get();
+        Object previous = reference.get();
         for(; ; ) {
-          if(current != null && current != SyncMap.EXPUNGED) return (V) current;
+          if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
 
-          final Object previous = reference.compareAndExchange(current, value);
-          if(previous != current) {
-            current = previous;
+          final Object witness = reference.compareAndExchange(previous, value);
+          if(witness != previous) {
+            previous = witness;
             Thread.onSpinWait();
             continue;
           }
 
-          if(previous == SyncMap.EXPUNGED) {
+          if(witness == SyncMap.EXPUNGED) {
             this.amendNode(hash, key, reference);
           }
 
@@ -800,13 +800,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.reference;
-                Object current = reference.get();
+                Object previous = reference.get();
                 for(; ; ) {
-                  if(current != null && current != SyncMap.EXPUNGED) return (V) current;
+                  if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
 
-                  final Object previous = reference.compareAndExchange(current, value);
-                  if (previous != current) {
-                    current = previous;
+                  final Object witness = reference.compareAndExchange(previous, value);
+                  if(witness != previous) {
+                    previous = witness;
                     Thread.onSpinWait();
                     continue;
                   }
@@ -848,19 +848,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        Object current = reference.get();
+        Object previous = reference.get();
         for(; ; ) {
-          final Object previous = reference.compareAndExchange(current, value);
-          if(previous != current) {
-            current = previous;
+          final Object witness = reference.compareAndExchange(previous, value);
+          if(witness != previous) {
+            previous = witness;
             Thread.onSpinWait();
             continue;
           }
 
-          if(previous == SyncMap.EXPUNGED) {
+          if(witness == SyncMap.EXPUNGED) {
             this.amendNode(hash, key, reference);
-          } else if(previous != null) {
-            return (V) previous;
+          } else if(witness != null) {
+            return (V) witness;
           }
 
           break retry;
@@ -885,17 +885,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.reference;
-                Object current = reference.get();
+                Object previous = reference.get();
                 for(; ; ) {
-                  final Object previous = reference.compareAndExchange(current, value);
-                  if(previous != current) {
-                    current = previous;
+                  final Object witness = reference.compareAndExchange(previous, value);
+                  if(witness != previous) {
+                    previous = witness;
                     Thread.onSpinWait();
                     continue;
                   }
 
-                  if(previous != null && previous != SyncMap.EXPUNGED) {
-                    return (V) previous;
+                  if(witness != null && witness != SyncMap.EXPUNGED) {
+                    return (V) witness;
                   }
 
                   break retry;
@@ -1050,14 +1050,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         final ObjectReference reference = node.reference;
-        Object current = reference.get();
+        Object previous = reference.get();
         for(; ; ) {
-          if(current == null || current == SyncMap.EXPUNGED) return false;
-          if(!Objects.equals(value, current)) return false;
+          if(previous == null || previous == SyncMap.EXPUNGED) return false;
+          if(!Objects.equals(value, previous)) return false;
 
-          final Object previous = reference.compareAndExchange(current, null);
-          if(previous != current) {
-            current = previous;
+          final Object witness = reference.compareAndExchange(previous, null);
+          if(witness != previous) {
+            previous = witness;
             Thread.onSpinWait();
             continue;
           }
@@ -1076,14 +1076,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.reference;
-                Object current = reference.get();
+                Object previous = reference.get();
                 for(; ; ) {
-                  if(current == null || current == SyncMap.EXPUNGED) return false;
-                  if(!Objects.equals(value, current)) return false;
+                  if(previous == null || previous == SyncMap.EXPUNGED) return false;
+                  if(!Objects.equals(value, previous)) return false;
 
-                  final Object previous = reference.compareAndExchange(current, null);
-                  if(previous != current) {
-                    current = previous;
+                  final Object witness = reference.compareAndExchange(previous, null);
+                  if(witness != previous) {
+                    previous = witness;
                     Thread.onSpinWait();
                     continue;
                   }
@@ -1290,9 +1290,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       for(; ; ) {
         if(current == null || current == SyncMap.EXPUNGED) continue;
 
-        final Object previous = reference.compareAndExchange(current, null);
-        if(previous != current) {
-          current = previous;
+        final Object witness = reference.compareAndExchange(current, null);
+        if(witness != current) {
+          current = witness;
           Thread.onSpinWait();
           continue;
         }
@@ -1317,7 +1317,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * identical to the pair currently in the map.</p>
    */
   @Override
-  public @NotNull Set<Entry<K, V>> entrySet() {
+  public @NotNull Set<Map.Entry<K, V>> entrySet() {
     if(this.entrySet != null) return this.entrySet;
     return this.entrySet = new EntrySet();
   }
@@ -2017,7 +2017,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * Represents a view of a map entry.
    */
-  /* package */ final class MapEntry implements Entry<K, V> {
+  /* package */ final class MapEntry implements Map.Entry<K, V> {
     private final K key;
     private V value;
 
@@ -2065,7 +2065,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * Represents a view of the map entries.
    */
-  /* package */ final class EntrySet extends AbstractSet<Entry<K, V>> {
+  /* package */ final class EntrySet extends AbstractSet<Map.Entry<K, V>> {
     @Override
     public int size() {
       return SyncMap.this.size();
@@ -2090,7 +2090,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     @Override
-    public @NotNull Iterator<Entry<K, V>> iterator() {
+    public @NotNull Iterator<Map.Entry<K, V>> iterator() {
       SyncMap.this.promote();
       return new EntryIterator(SyncMap.this.immutableTable);
     }
@@ -2100,9 +2100,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents an entry {@link Iterator} that traverses the nodes in the
    * given table.
    */
-  /* package */ final class EntryIterator extends Traverser<K, V> implements Iterator<Entry<K, V>> {
-    private Entry<K, V> next;
-    private Entry<K, V> current;
+  /* package */ final class EntryIterator extends Traverser<K, V> implements Iterator<Map.Entry<K, V>> {
+    private Map.Entry<K, V> next;
+    private Map.Entry<K, V> current;
 
     /* package */ EntryIterator(final Node<K, V>@NotNull [] table) {
       super(table);
@@ -2117,7 +2117,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     @Override
     public @NotNull Entry<K, V> next() {
-      final Entry<K, V> current;
+      final Map.Entry<K, V> current;
       if((current = this.next) == null) throw new NoSuchElementException();
       this.current = current;
       this.advanceEntry();
@@ -2126,7 +2126,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     @Override
     public void remove() {
-      final Entry<K, V> current;
+      final Map.Entry<K, V> current;
       if((current = this.current) == null) throw new IllegalStateException();
       this.current = null;
       SyncMap.this.remove(current.getKey(), current.getValue());
