@@ -6,3 +6,5 @@ plugins {
 dependencies {
   compileOnlyApi(libs.jetbrainsAnnotations)
 }
+
+applyJarMetadata("space.vectrix.sync.collections")

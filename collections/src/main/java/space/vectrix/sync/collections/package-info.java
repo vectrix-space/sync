@@ -24,4 +24,4 @@
 /**
  * Sync Collections: Thread-safe collections for highly concurrent scenarios.
  */
-package space.vectrix.collections;
+package space.vectrix.sync.collections;

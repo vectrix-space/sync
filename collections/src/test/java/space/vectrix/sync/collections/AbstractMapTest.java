@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package space.vectrix.collections;
+package space.vectrix.sync.collections;
 
 import java.util.Iterator;
 import java.util.Map;

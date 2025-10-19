@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package space.vectrix.collections;
+package space.vectrix.sync.collections;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -1710,7 +1710,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
                 }
 
-                final space.vectrix.collections.SyncMap.Node<K, V> cloned = new space.vectrix.collections.SyncMap.Node<>(node.hash, node.key, node.reference);
+                final SyncMap.Node<K, V> cloned = new SyncMap.Node<>(node.hash, node.key, node.reference);
                 if((node.hash & capacity) == 0) {
                   if(loTail == null) {
                     loHead = cloned;

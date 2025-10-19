@@ -50,7 +50,7 @@ spotless {
   fun FormatExtension.applyCommon() {
     trimTrailingWhitespace()
     endWithNewline()
-    indentWithSpaces(2)
+    leadingTabsToSpaces(2)
   }
 
   java {
