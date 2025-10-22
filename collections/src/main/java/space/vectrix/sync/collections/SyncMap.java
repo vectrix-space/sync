@@ -207,7 +207,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return true if new node was set, otherwise false
    */
   /* package */ static <K, V> boolean replaceNode(final Node<K, V>@NotNull [] table, final int index, final @Nullable Node<K, V> nextNode) {
-    return SyncMap.NODE_ARRAY.compareAndSet(table, index, (Node<K, V>) null, nextNode);
+    return SyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node<K, V>) null, nextNode) == null;
   }
 
   /**
@@ -263,12 +263,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents the transfer index a thread may claim a range of when
    * participating in a transfer operation.
    */
-  private transient volatile int transferIndex;
+  @SuppressWarnings("unused")
+  private transient int transferIndex;
 
   /**
    * Represents the transfer progress threads will add completed ranges to.
    */
-  private transient volatile int transferProgress;
+  @SuppressWarnings("unused")
+  private transient int transferProgress;
 
   /**
    * Represents the stamp lock for the bulk operations on the table.
@@ -369,7 +371,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
       }
 
-      while((node = node.next) != null) {
+      while((node = node.next()) != null) {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
           return node.reference().valueExists();
         }
@@ -391,7 +393,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           }
         }
 
-        while((node = node.next) != null) {
+        while((node = node.next()) != null) {
           if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
             exists = node.reference().valueExists();
             break retry;
@@ -427,7 +429,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
       }
 
-      while((node = node.next) != null) {
+      while((node = node.next()) != null) {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
           return node.reference().value();
         }
@@ -449,7 +451,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           }
         }
 
-        while((node = node.next) != null) {
+        while((node = node.next()) != null) {
           if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
             value = node.reference().value();
             break retry;
@@ -486,7 +488,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
       }
 
-      while((node = node.next) != null) {
+      while((node = node.next()) != null) {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
           return node.reference().valueOr(defaultValue);
         }
@@ -508,7 +510,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           }
         }
 
-        while((node = node.next) != null) {
+        while((node = node.next()) != null) {
           if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
             value = node.reference().valueOr(defaultValue);
             break retry;
@@ -543,7 +545,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -614,11 +616,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               }
 
               final Node<K, V> previousNode = node;
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 next = mappingFunction.apply(key);
                 if(next == null) return null;
 
-                previousNode.next = new Node<>(hash, key, new ObjectReference(next));
+                previousNode.next(new Node<>(hash, key, new ObjectReference(next)));
                 break retry;
               }
             }
@@ -651,7 +653,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -700,9 +702,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
                   if(next == null) {
                     if(previousNode != null) {
-                      previousNode.next = node.next;
+                      previousNode.next(node.next());
                     } else {
-                      SyncMap.setNode(mutable, index, node.next);
+                      SyncMap.setNode(mutable, index, node.next());
                     }
 
                     count = -1L;
@@ -714,7 +716,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               previousNode = node;
 
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 return null;
               }
             }
@@ -747,7 +749,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -822,9 +824,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     count = 1L;
                   } else if(next == null && (witness != null && witness != SyncMap.EXPUNGED)) {
                     if(previousNode != null) {
-                      previousNode.next = node.next;
+                      previousNode.next(node.next());
                     } else {
-                      SyncMap.setNode(mutable, index, node.next);
+                      SyncMap.setNode(mutable, index, node.next());
                     }
 
                     count = -1L;
@@ -836,11 +838,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               previousNode = node;
 
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 next = remappingFunction.apply(key, null);
                 if(next == null) return null;
 
-                previousNode.next = new Node<>(hash, key, new ObjectReference(next));
+                previousNode.next(new Node<>(hash, key, new ObjectReference(next)));
 
                 count = 1L;
                 break retry;
@@ -874,7 +876,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -936,8 +938,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               }
 
               final Node<K, V> previousNode = node;
-              if((node = node.next) == null) {
-                previousNode.next = new Node<>(hash, key, new ObjectReference(value));
+              if((node = node.next()) == null) {
+                previousNode.next(new Node<>(hash, key, new ObjectReference(value)));
                 break retry;
               }
             }
@@ -969,7 +971,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -1033,8 +1035,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               }
 
               final Node<K, V> previousNode = node;
-              if((node = node.next) == null) {
-                previousNode.next = new Node<>(hash, key, new ObjectReference(value));
+              if((node = node.next()) == null) {
+                previousNode.next(new Node<>(hash, key, new ObjectReference(value)));
                 break retry;
               }
             }
@@ -1073,8 +1075,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               }
 
               final Node<K, V> previousNode = node;
-              if((node = node.next) == null) {
-                previousNode.next = new Node<>(hash, key, reference);
+              if((node = node.next()) == null) {
+                previousNode.next(new Node<>(hash, key, reference));
                 return;
               }
             }
@@ -1103,7 +1105,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -1145,9 +1147,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
 
                   if(previousNode != null) {
-                    previousNode.next = node.next;
+                    previousNode.next(node.next());
                   } else {
-                    SyncMap.setNode(mutable, index, node.next);
+                    SyncMap.setNode(mutable, index, node.next());
                   }
 
                   break retry;
@@ -1156,7 +1158,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               previousNode = node;
 
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 return null;
               }
             }
@@ -1187,7 +1189,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -1231,9 +1233,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
 
                   if(previousNode != null) {
-                    previousNode.next = node.next;
+                    previousNode.next(node.next());
                   } else {
-                    SyncMap.setNode(mutable, index, node.next);
+                    SyncMap.setNode(mutable, index, node.next());
                   }
 
                   break retry;
@@ -1242,7 +1244,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
               previousNode = node;
 
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 return false;
               }
             }
@@ -1275,7 +1277,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -1320,7 +1322,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                 }
               }
 
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 return null;
               }
             }
@@ -1352,7 +1354,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         node = SyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
-            node = node.next;
+            node = node.next();
             continue;
           }
 
@@ -1399,7 +1401,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                 }
               }
 
-              if((node = node.next) == null) {
+              if((node = node.next()) == null) {
                 return false;
               }
             }
@@ -1617,7 +1619,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         this.capacity = length << 1;
-        this.transferIndex = length;
+        SyncMap.TRANSFER_INDEX.setRelease(this, length);
         this.transferTable = destination = new Node[this.capacity];
         break;
       } else if(StampLock.modeOf(stamp) == StampLock.MODE_RESIZE && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
@@ -1691,8 +1693,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
 
       if(finalize) {
-        this.transferIndex = 0;
-        this.transferProgress = 0;
+        SyncMap.TRANSFER_INDEX.setRelease(this, 0);
+        SyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
 
         this.transferTable = null;
         this.mutableTable = destination;
@@ -1733,7 +1735,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           continue;
         }
 
-        this.transferIndex = length;
+        SyncMap.TRANSFER_INDEX.setRelease(this, length);
         this.transferTable = destination = new Node[length];
         break;
       } else if(StampLock.modeOf(stamp) == StampLock.MODE_AMEND && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
@@ -1807,8 +1809,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
 
       if(finalize) {
-        this.transferIndex = 0;
-        this.transferProgress = 0;
+        SyncMap.TRANSFER_INDEX.setRelease(this, 0);
+        SyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
 
         this.transferTable = null;
         this.mutableTable = destination;
@@ -1882,7 +1884,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               Node<K, V> next = node;
 
               retry: while((node = next) != null) {
-                next = node.next;
+                next = node.next();
 
                 final ObjectReference reference = node.reference();
                 if(!resize) {
@@ -1905,7 +1907,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if(loTail == null) {
                     loHead = cloned;
                   } else {
-                    loTail.next = cloned;
+                    loTail.next(cloned);
                   }
 
                   loTail = cloned;
@@ -1913,7 +1915,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if(hiTail == null) {
                     hiHead = cloned;
                   } else {
-                    hiTail.next = cloned;
+                    hiTail.next(cloned);
                   }
 
                   hiTail = cloned;
@@ -1925,7 +1927,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                 if(hiHead != null) SyncMap.setNode(destination, i + capacity, hiHead);
               } else {
                 if(loTail != null) {
-                  loTail.next = hiHead;
+                  loTail.next(hiHead);
 
                   if(loHead != null) SyncMap.setNode(destination, i, loHead);
                 } else {
@@ -2137,7 +2139,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     /* package */ boolean expunge() {
-      return ObjectReference.VALUE.compareAndSet(this, null, SyncMap.EXPUNGED);
+      return ObjectReference.VALUE.compareAndExchangeRelease(this, null, SyncMap.EXPUNGED) == null;
     }
 
     /* package */ @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
@@ -2157,12 +2159,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   /* package */ static class Node<K, V> {
     private static final VarHandle REFERENCE;
+    private static final VarHandle NEXT;
 
     static {
       try {
         final MethodHandles.Lookup lookup = MethodHandles.lookup();
 
         REFERENCE = lookup.findVarHandle(Node.class, "reference", ObjectReference.class);
+        NEXT = lookup.findVarHandle(Node.class, "next", Node.class);
       } catch(final Exception exception) {
         throw new ExceptionInInitializerError(exception);
       }
@@ -2171,12 +2175,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     /* package */ final int hash;
     /* package */ final K key;
     /* package */ ObjectReference reference;
-    /* package */ volatile Node<K, V> next;
+    /* package */ Node<K, V> next;
 
     /* package */ Node(final int hash, final @UnknownNullability K key, final @Nullable ObjectReference reference) {
       this.hash = hash;
       this.key = key;
-      this.reference = reference;
+
+      Node.REFERENCE.setRelease(this, reference);
     }
 
     /* package */ @NotNull ObjectReference reference() {
@@ -2187,11 +2192,20 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node.REFERENCE.setRelease(this, reference);
     }
 
+    @SuppressWarnings("unchecked")
+    /* package */ @Nullable Node<K, V> next() {
+      return (Node<K, V>) Node.NEXT.getOpaque(this);
+    }
+
+    /* package */ void next(final @Nullable Node<K, V> node) {
+      Node.NEXT.setRelease(this, node);
+    }
+
     /* package */ @Nullable Node<K, V> find(final int hash, final @NotNull Object key) {
       Node<K, V> node = this; K nodeKey;
       do {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) return node;
-      } while((node = node.next) != null);
+      } while((node = node.next()) != null);
 
       return null;
     }
@@ -2226,7 +2240,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             return node;
           }
 
-          while((node = node.next) != null) {
+          while((node = node.next()) != null) {
             if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
               return node;
             }
@@ -2395,7 +2409,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     /* package */ final @Nullable Node<K, V> advanceNode() {
       Node<K, V> node;
       if((node = this.next) != null) {
-        node = node.next;
+        node = node.next();
       }
 
       for(; ; ) {
