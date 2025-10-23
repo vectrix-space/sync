@@ -2119,19 +2119,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     /* package */ boolean valueExists() {
       final Object value;
-      return (value = this.get()) != null && value != SyncMap.EXPUNGED;
+      return (value = ObjectReference.VALUE.getOpaque(this)) != null && value != SyncMap.EXPUNGED;
     }
 
     @SuppressWarnings("unchecked")
     /* package */ <V> @Nullable V value() {
       final Object value;
-      return (value = this.get()) != SyncMap.EXPUNGED ? (V) value : null;
+      return (value = ObjectReference.VALUE.getAcquire(this)) != SyncMap.EXPUNGED ? (V) value : null;
     }
 
     @SuppressWarnings("unchecked")
     /* package */ <V> @NotNull V valueOr(final @NotNull V defaultValue) {
       final Object value;
-      return ((value = this.get()) != null && value != SyncMap.EXPUNGED) ? (V) value : defaultValue;
+      return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != SyncMap.EXPUNGED) ? (V) value : defaultValue;
     }
 
     /* package */ @Nullable Object get() {
