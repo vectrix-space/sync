@@ -10,6 +10,7 @@ junit = "6.0.0"
 
 [libraries]
 jetbrainsAnnotations = "org.jetbrains:annotations:26.0.2-1"
+jspecify = "org.jspecify:jspecify:1.0.0"
 
 junit-api = { module = "org.junit.jupiter:junit-jupiter-api" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
