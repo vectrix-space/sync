@@ -1498,6 +1498,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     this.promote();
   }
 
+  /**
+   * Locks for the initialize operation, then creates a mutable table to
+   * allow initial writes.
+   *
+   * @return the mutable table
+   */
   @SuppressWarnings({"unchecked", "rawtypes"})
   /* package */ @Nullable Node<K, V>[] initialize() {
     Node<K, V>[] source, destination;
@@ -1578,7 +1584,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    *
    * @param node the forwarding node
    * @return the next table
-   * @since 1.0.0
    */
   /* package */ Node<K, V>@Nullable [] forward(final @NotNull ForwardingNode<K, V> node) {
     if(this.amended) {
