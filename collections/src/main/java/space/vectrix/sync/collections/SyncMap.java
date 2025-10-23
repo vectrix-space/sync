@@ -39,9 +39,9 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import org.jetbrains.annotations.ApiStatus;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.UnknownNullability;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import static java.util.Objects.requireNonNull;
 
@@ -191,7 +191,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the node, or null
    */
   @SuppressWarnings("unchecked")
-  /* package */ static <K, V> @Nullable Node<K, V> getNode(final Node<K, V>@NotNull [] table, final int index) {
+  /* package */ static <K, V> @Nullable Node<K, V> getNode(final Node<K, V>[] table, final int index) {
     return (Node<K, V>) SyncMap.NODE_ARRAY.getAcquire(table, index);
   }
 
@@ -206,7 +206,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param nextNode the new node
    * @return true if new node was set, otherwise false
    */
-  /* package */ static <K, V> boolean replaceNode(final Node<K, V>@NotNull [] table, final int index, final @Nullable Node<K, V> nextNode) {
+  /* package */ static <K, V> boolean replaceNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> nextNode) {
     return SyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node<K, V>) null, nextNode) == null;
   }
 
@@ -219,7 +219,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <K> the key type
    * @param <V> the value type
    */
-  /* package */ static <K, V> void setNode(final Node<K, V> @NotNull [] table, final int index, final @Nullable Node<K, V> node) {
+  /* package */ static <K, V> void setNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> node) {
     SyncMap.NODE_ARRAY.setRelease(table, index, node);
   }
 
@@ -234,7 +234,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents an immutable hash table that allows fast retrieval and updates
    * without locking.
    */
-  /* package */ transient volatile Node<K, V>@NotNull [] immutableTable;
+  /* package */ transient volatile Node<K, V>[] immutableTable;
 
   /**
    * Represents a mutable hash table that allows updates of new nodes with
@@ -292,7 +292,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * Represents a view of the entries in this map.
    */
-  private transient EntrySet entrySet;
+  private transient @Nullable EntrySet entrySet;
 
   /* ------------------------- < Public Operations > ------------------------- */
 
@@ -351,7 +351,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
-  public boolean containsKey(final @NotNull Object key) {
+  public boolean containsKey(final Object key) {
     requireNonNull(key, "key");
 
     Node<K, V>[] table = this.immutableTable; int length = table.length;
@@ -409,7 +409,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
-  public @Nullable V get(final @NotNull Object key) {
+  public @Nullable V get(final Object key) {
     requireNonNull(key, "key");
 
     Node<K, V>[] table = this.immutableTable; int length = table.length;
@@ -467,7 +467,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
-  public @NotNull V getOrDefault(final @NotNull Object key, final @NotNull V defaultValue) {
+  public V getOrDefault(final Object key, final V defaultValue) {
     requireNonNull(key, "key");
     requireNonNull(defaultValue, "defaultValue");
 
@@ -527,7 +527,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V computeIfAbsent(final @NotNull K key, final @NotNull Function<? super @NotNull K, ? extends @Nullable V> mappingFunction) {
+  public @Nullable V computeIfAbsent(final K key, final Function<? super K, ? extends @Nullable V> mappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(mappingFunction, "mappingFunction");
 
@@ -635,7 +635,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V computeIfPresent(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @NotNull V, ? extends @Nullable V> remappingFunction) {
+  public @Nullable V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
@@ -731,7 +731,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V compute(final @NotNull K key, final @NotNull BiFunction<? super @NotNull K, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {
+  public @Nullable V compute(final K key, final BiFunction<? super K, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
@@ -859,7 +859,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V putIfAbsent(final @NotNull K key, final @NotNull V value) {
+  public @Nullable V putIfAbsent(final @NonNull K key, final V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
@@ -954,7 +954,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V put(final @NotNull K key, final @NotNull V value) {
+  public @Nullable V put(final K key, final V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
@@ -1049,7 +1049,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return null;
   }
 
-  /* package */ void amendNode(final int hash, final @NotNull K key, final @NotNull ObjectReference reference) {
+  /* package */ void amendNode(final int hash, final K key, final ObjectReference reference) {
     Node<K, V>[] table = this.mutableTable;
 
     for(Node<K, V> node; ; ) {
@@ -1088,7 +1088,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V remove(final @NotNull Object key) {
+  public @Nullable V remove(final Object key) {
     requireNonNull(key, "key");
 
     Node<K, V>[] immutable, mutable; int length;
@@ -1172,7 +1172,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
-  public boolean remove(final @NotNull Object key, final @NotNull Object value) {
+  public boolean remove(final Object key, final Object value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
@@ -1259,7 +1259,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V replace(final @NotNull K key, final @NotNull V value) {
+  public @Nullable V replace(final @NonNull K key, final @NonNull V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
@@ -1335,7 +1335,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   }
 
   @Override
-  public boolean replace(final @NotNull K key, final @NotNull V oldValue, final @NotNull V newValue) {
+  public boolean replace(final @NonNull K key, final @NonNull V oldValue, final @NonNull V newValue) {
     requireNonNull(key, "key");
     requireNonNull(oldValue, "oldValue");
     requireNonNull(newValue, "newValue");
@@ -1417,7 +1417,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
   @Override
   @SuppressWarnings("unchecked")
-  public void forEach(final @NotNull BiConsumer<? super @NotNull K, ? super @NotNull V> action) {
+  public void forEach(final BiConsumer<? super K, ? super V> action) {
     requireNonNull(action, "action");
 
     this.promote();
@@ -1479,7 +1479,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * identical to the pair currently in the map.</p>
    */
   @Override
-  public @NotNull Set<Map.Entry<K, V>> entrySet() {
+  public Set<Map.Entry<K, V>> entrySet() {
     if(this.entrySet != null) return this.entrySet;
     return this.entrySet = new EntrySet();
   }
@@ -1505,7 +1505,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the mutable table
    */
   @SuppressWarnings({"unchecked", "rawtypes"})
-  /* package */ @Nullable Node<K, V>[] initialize() {
+  /* package */ Node<K, V>@Nullable [] initialize() {
     Node<K, V>[] source, destination;
 
     long stamp = this.stampLock.getAcquire();
@@ -1585,7 +1585,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param node the forwarding node
    * @return the next table
    */
-  /* package */ Node<K, V>@Nullable [] forward(final @NotNull ForwardingNode<K, V> node) {
+  /* package */ Node<K, V>@Nullable [] forward(final ForwardingNode<K, V> node) {
     if(this.amended) {
       final Node<K, V>[] next = node.nextTable;
       if(next == this.transferTable) return next;
@@ -1838,7 +1838,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the transfer progress count
    */
   @SuppressWarnings({"SynchronizationOnLocalVariableOrMethodParameter"})
-  /* package */ int transfer(final Node<K, V>@NotNull [] source, final Node<K, V>@NotNull [] destination, final boolean resize) {
+  /* package */ int transfer(final Node<K, V>[] source, final Node<K, V>[] destination, final boolean resize) {
     final int capacity = source.length, nextCapacity = destination.length;
 
     int stride;
@@ -2116,7 +2116,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
     }
 
-    private Object value;
+    private @Nullable Object value;
 
     /* package */ ObjectReference(final @Nullable Object value) {
       this.value = value;
@@ -2134,7 +2134,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     @SuppressWarnings("unchecked")
-    /* package */ <V> @NotNull V valueOr(final @NotNull V defaultValue) {
+    /* package */ <V> V valueOr(final V defaultValue) {
       final Object value;
       return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != SyncMap.EXPUNGED) ? (V) value : defaultValue;
     }
@@ -2179,8 +2179,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     /* package */ final int hash;
     /* package */ final K key;
-    /* package */ ObjectReference reference;
-    /* package */ Node<K, V> next;
+    /* package */ @Nullable ObjectReference reference;
+    /* package */ @Nullable Node<K, V> next;
 
     /* package */ Node(final int hash, final @UnknownNullability K key, final @Nullable ObjectReference reference) {
       this.hash = hash;
@@ -2189,11 +2189,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node.REFERENCE.setRelease(this, reference);
     }
 
-    /* package */ @NotNull ObjectReference reference() {
+    /* package */ ObjectReference reference() {
       return (ObjectReference) Node.REFERENCE.getAcquire(this);
     }
 
-    /* package */ void reference(final @NotNull ObjectReference reference) {
+    /* package */ void reference(final ObjectReference reference) {
       Node.REFERENCE.setRelease(this, reference);
     }
 
@@ -2206,7 +2206,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node.NEXT.setRelease(this, node);
     }
 
-    /* package */ @Nullable Node<K, V> find(final int hash, final @NotNull Object key) {
+    /* package */ @Nullable Node<K, V> find(final int hash, final Object key) {
       Node<K, V> node = this; K nodeKey;
       do {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) return node;
@@ -2225,17 +2225,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final class ForwardingNode<K, V> extends Node<K, V> {
     /* package */ transient final Node<K, V>[] nextTable;
 
-    /* package */ ForwardingNode(final Node<K, V>@NotNull [] nextTable) {
+    /* package */ ForwardingNode(final Node<K, V>[] nextTable) {
       super(SyncMap.NODE_MOVED, null, null);
 
       this.nextTable = nextTable;
     }
 
     @Override
-    /* package */ @Nullable Node<K, V> find(final int hash, final @NotNull Object key) {
+    /* package */ @Nullable Node<K, V> find(final int hash, final Object key) {
       Node<K, V> node; int length, nodeHash; K nodeKey;
 
-      for(Node<K, V>[] table = this.nextTable; table != null && (length = table.length) > 0; ) {
+      for(Node<K, V>[] table = this.nextTable; (length = table.length) > 0; ) {
         if((node = SyncMap.getNode(table, (length - 1) & hash)) == null) {
           return null;
         } else if((nodeHash = node.hash) == SyncMap.NODE_MOVED) {
@@ -2266,9 +2266,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   /* package */ final class MapEntry implements Map.Entry<K, V> {
     private final K key;
-    private V value;
+    private @Nullable V value;
 
-    /* package */ MapEntry(final @NotNull K key, final @Nullable V value) {
+    /* package */ MapEntry(final K key, final @Nullable V value) {
       this.key = key;
       this.value = value;
     }
@@ -2279,12 +2279,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     @Override
-    public V getValue() {
+    public @Nullable V getValue() {
       return this.value;
     }
 
     @Override
-    public V setValue(final @NotNull V value) {
+    public @Nullable V setValue(final V value) {
       final V previous = SyncMap.this.put(this.key, value);
       this.value = value;
       return previous;
@@ -2337,7 +2337,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     @Override
-    public @NotNull Iterator<Map.Entry<K, V>> iterator() {
+    public Iterator<Map.Entry<K, V>> iterator() {
       SyncMap.this.promote();
       return new EntryIterator(SyncMap.this.immutableTable);
     }
@@ -2348,10 +2348,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * given table.
    */
   /* package */ final class EntryIterator extends Traverser<K, V> implements Iterator<Map.Entry<K, V>> {
-    private Map.Entry<K, V> next;
-    private Map.Entry<K, V> current;
+    private Map.@Nullable Entry<K, V> next;
+    private Map.@Nullable Entry<K, V> current;
 
-    /* package */ EntryIterator(final Node<K, V>@NotNull [] table) {
+    /* package */ EntryIterator(final Node<K, V>[] table) {
       super(table);
 
       this.advanceEntry();
@@ -2363,7 +2363,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     @Override
-    public @NotNull Entry<K, V> next() {
+    public Map.Entry<K, V> next() {
       final Map.Entry<K, V> current;
       if((current = this.next) == null) throw new NoSuchElementException();
       this.current = current;
@@ -2403,10 +2403,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static class Traverser<K, V> {
     private final Node<K, V>[] table;
     private final int length;
-    private Node<K, V> next;
+    private @Nullable Node<K, V> next;
     private int index;
 
-    /* package */ Traverser(final Node<K, V>@NotNull [] table) {
+    /* package */ Traverser(final Node<K, V>[] table) {
       this.table = table;
       this.length = table.length;
     }
