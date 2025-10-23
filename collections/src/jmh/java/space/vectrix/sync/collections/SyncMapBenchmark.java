@@ -26,7 +26,7 @@ package space.vectrix.sync.collections;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Random;
+import java.util.SplittableRandom;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -35,7 +35,6 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
-import org.openjdk.jmh.annotations.OperationsPerInvocation;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
@@ -45,89 +44,112 @@ import org.openjdk.jmh.annotations.Threads;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
-@BenchmarkMode(Mode.Throughput)
-@OutputTimeUnit(TimeUnit.NANOSECONDS)
-@State(Scope.Benchmark)
 @Fork(1)
 @Warmup(iterations = 5)
 @Measurement(iterations = 5)
+@BenchmarkMode(Mode.Throughput)
+@OutputTimeUnit(TimeUnit.NANOSECONDS)
 public class SyncMapBenchmark {
-  private static final int SIZE = 100_000;
+  @State(Scope.Benchmark)
+  public static class Container {
+    @Param({ "SyncMap", "ConcurrentHashMap", "SynchronizedMap" })
+    private String implementation;
 
-  @Param({ "SyncMap", "SynchronizedMap", "ConcurrentHashMap" })
-  private String implementation;
+    @Param({ "none", "presize", "prepopulate" })
+    private String mode;
 
-  @Param({ "none", "presize", "prepopulate" })
-  private String mode;
+    @Param({ "false", "true" })
+    private boolean prime;
 
-  private Map<Integer, Integer> map;
+    @Param({ "100000" })
+    private int size;
 
-  @Setup(Level.Iteration)
-  public void setup() {
-    final boolean presized = !"none".equalsIgnoreCase(this.mode);
-    final boolean prepopulate = "prepopulate".equalsIgnoreCase(this.mode);
+    private Map<Integer, Integer> map;
 
-    if ("SyncMap".equalsIgnoreCase(this.implementation)) {
-      this.map = presized ? new SyncMap<>(SyncMapBenchmark.SIZE) : new SyncMap<>();
-    } else if ("SynchronizedMap".equalsIgnoreCase(this.implementation)) {
-      this.map = presized
-        ? Collections.synchronizedMap(new HashMap<>(SyncMapBenchmark.SIZE))
-        : Collections.synchronizedMap(new HashMap<>());
-    } else if ("ConcurrentHashMap".equalsIgnoreCase(this.implementation)) {
-      this.map = presized ? new ConcurrentHashMap<>(SyncMapBenchmark.SIZE) : new ConcurrentHashMap<>();
-    }
+    @Setup(Level.Iteration)
+    public void setup() {
+      final boolean presized = !"none".equalsIgnoreCase(this.mode);
+      final boolean prepopulate = "prepopulate".equalsIgnoreCase(this.mode);
 
-    if(prepopulate) {
-      for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
-        this.map.put(i, i);
+      switch(this.implementation) {
+        case "SyncMap" -> this.map = presized ? new SyncMap<>(this.size) : new SyncMap<>();
+        case "ConcurrentHashMap" -> this.map = presized ? new ConcurrentHashMap<>(this.size) : new ConcurrentHashMap<>();
+        case "SynchronizedMap" -> this.map = presized
+          ? Collections.synchronizedMap(new HashMap<>(this.size))
+          : Collections.synchronizedMap(new HashMap<>());
+        default -> throw new IllegalArgumentException("Unable to identify implementation: " + this.implementation);
+      }
+
+      if(prepopulate) {
+        for(int i = 0; i < this.size; i++) {
+          this.map.put(i, i);
+        }
+      }
+
+      if(this.prime) {
+        if(this.map instanceof final SyncMap<Integer, Integer> syncMap) {
+          syncMap.promote();
+        } else {
+          for(int i = 0; i < this.size; i++) {
+            this.map.get(i);
+          }
+        }
       }
     }
-
-    if(presized && (this.map instanceof final SyncMap<Integer, Integer> sync)) {
-      sync.promote();
-    }
   }
 
-  @Benchmark
-  @Threads(8)
-  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
-  public void getOnly(final Blackhole blackhole) {
-    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
-      blackhole.consume(this.map.get(i));
-    }
-  }
+  @State(Scope.Thread)
+  public static class Sample {
+    @Param({ "50" })
+    private int readPercentage;
 
-  @Benchmark
-  @Threads(8)
-  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
-  public void putOnly(final Blackhole blackhole) {
-    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
-      blackhole.consume(this.map.put(i, i));
-    }
-  }
+    private int cursor;
+    private int length;
+    private boolean[] isRead;
 
-  @Benchmark
-  @Threads(8)
-  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
-  public void putAndGet(final Blackhole blackhole) {
-    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
-      blackhole.consume(this.map.put(i, i));
-      blackhole.consume(this.map.get(i));
-    }
-  }
+    @Setup(Level.Iteration)
+    public void setup(final Container container) {
+      this.length = container.size;
+      this.isRead = new boolean[this.length];
 
-  @Benchmark
-  @Threads(8)
-  @OperationsPerInvocation(SyncMapBenchmark.SIZE)
-  public void randomPutAndGet(final Blackhole blackhole) {
-    final Random random = new Random(8);
-    for(int i = 0; i < SyncMapBenchmark.SIZE; i++) {
-      final int key = random.nextInt(SyncMapBenchmark.SIZE);
-      if(random.nextBoolean()) {
-        blackhole.consume(this.map.put(key, key));
-      } else {
-        blackhole.consume(this.map.get(key));
+      final SplittableRandom random = new SplittableRandom(Thread.currentThread().getId());
+      for(int i = 0; i < this.length; i++) {
+        this.isRead[i] = random.nextInt(100) < this.readPercentage;
       }
+
+      this.cursor = 0;
+    }
+
+    private int next() {
+      final int i = this.cursor;
+      this.cursor = (i + 1) % this.length;
+      return i;
+    }
+  }
+
+  @Benchmark
+  @Threads(8)
+  public void get_only(final Container container, final Sample sample, final Blackhole blackhole) {
+    final int key = sample.next();
+    blackhole.consume(container.map.get(key));
+  }
+
+  @Benchmark
+  @Threads(8)
+  public void put_only(final Container container, final Sample sample, final Blackhole blackhole) {
+    final int key = sample.next();
+    blackhole.consume(container.map.put(key, key));
+  }
+
+  @Benchmark
+  @Threads(8)
+  public void get_put(final Container container, final Sample sample, final Blackhole blackhole) {
+    final int key = sample.next();
+
+    if(sample.isRead[key]) {
+      blackhole.consume(container.map.get(key));
+    } else {
+      blackhole.consume(container.map.put(key, key));
     }
   }
 }
