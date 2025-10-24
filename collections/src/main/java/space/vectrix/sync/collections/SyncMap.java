@@ -326,7 +326,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @since 1.0.0
    */
   public SyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity) {
-    this(mixFunction, initialCapacity, SyncMap.DEFAULT_CAPACITY);
+    this(mixFunction, initialCapacity, SyncMap.DEFAULT_LOAD_FACTOR);
   }
 
   /**
@@ -1498,11 +1498,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * {@inheritDoc}
    *
-   * <p>Creating an {@link Iterator} from this view, takes an immutable
-   * snapshot of the entries, meaning, modifications after calling
-   * {@link Set#iterator()} will not be visible. Calling
-   * {@link Iterator#remove()} will work provided the key-value pair is
-   * identical to the pair currently in the map.</p>
+   * <p>The {@link Iterator} produced by this view is weakly consistent: it
+   * iterates over an immutable snapshot captured at iterator creation time.
+   * New insertions after calling {@link Set#iterator()} are not reflected in
+   * the traversal.</p>
+   *
+   * <p>{@link Iterator#remove()} attempts to remove the last returned entry
+   * from the backing map, and succeeds only if the key still maps to the same
+   * value at the time of removal.</p>
    */
   @Override
   public Set<Map.Entry<K, V>> entrySet() {
