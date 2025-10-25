@@ -101,11 +101,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final int MINIMUM_TRANSFER_STRIDE = 16;
 
   /**
-   * Represents the number of usable bits for node hash keys.
-   */
-  /* package */ static final int HASH_BITS = 0x7FFFFFFF;
-
-  /**
    * Represents the hash for a node that has been transferred.
    */
   /* package */ static final int NODE_MOVED = -1;
@@ -121,17 +116,6 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* package */ static final int NCPU = Runtime.getRuntime().availableProcessors();
 
   /* ------------------------------ < Utilities > ------------------------------ */
-
-  /**
-   * Spreads the given hash value to a positive value and forces the top bit to
-   * 0.
-   *
-   * @param value the value to spread
-   * @return the spread value
-   */
-  /* package */ static int spread(final int value) {
-    return (value ^ (value >>> 16)) & SyncMap.HASH_BITS;
-  }
 
   /**
    * Returns the optimal table size depending on the given capacity.
@@ -226,6 +210,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* ------------------------------ < Fields > ------------------------------ */
 
   /**
+   * Represents the mix function for distributing hashes in the map.
+   */
+  /* package */ final transient Hashing.MixFunction mixFunction;
+
+  /**
    * Represents the load factor for resizing the map.
    */
   /* package */ final transient float loadFactor;
@@ -297,40 +286,77 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* ------------------------- < Public Operations > ------------------------- */
 
   /**
-   * Initializes a new {@link SyncMap} with {@link SyncMap#DEFAULT_CAPACITY} and
-   * {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   * Initializes a new {@link SyncMap} with {@link Hashing#FAST_MIX},
+   * {@link SyncMap#DEFAULT_CAPACITY} and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @since 1.0.0
    */
   public SyncMap() {
-    this(SyncMap.DEFAULT_CAPACITY);
+    this(Hashing.FAST_MIX);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with the given initial capacity and
-   * {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   * Initializes a new {@link SyncMap} with the given mix function,
+   * {@link SyncMap#DEFAULT_CAPACITY} and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   *
+   * @param mixFunction the mix function
+   * @since 1.0.0
+   */
+  public SyncMap(final Hashing.MixFunction mixFunction) {
+    this(mixFunction, SyncMap.DEFAULT_CAPACITY);
+  }
+
+  /**
+   * Initializes a new {@link SyncMap} with {@link Hashing#FAST_MIX}, the
+   * given initial capacity and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
   public SyncMap(final int initialCapacity) {
-    this(initialCapacity, SyncMap.DEFAULT_LOAD_FACTOR);
+    this(Hashing.FAST_MIX, initialCapacity);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with the given initial capacity and load
-   * factor.
+   * Initializes a new {@link SyncMap} with the given mix function, the given
+   * initial capacity and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   *
+   * @param mixFunction the mix function
+   * @param initialCapacity the initial capacity
+   * @since 1.0.0
+   */
+  public SyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity) {
+    this(mixFunction, initialCapacity, SyncMap.DEFAULT_LOAD_FACTOR);
+  }
+
+  /**
+   * Initializes a new {@link SyncMap} with {@link Hashing#FAST_MIX}, the
+   * given initial capacity and the given load factor.
    *
    * @param initialCapacity the initial capacity
    * @param loadFactor the load factor
    * @since 1.0.0
    */
-  @SuppressWarnings({"rawtypes", "unchecked"})
   public SyncMap(final int initialCapacity, final float loadFactor) {
+    this(Hashing.FAST_MIX, initialCapacity, loadFactor);
+  }
+
+  /**
+   * Initializes a new {@link SyncMap} with the given mix function, the given
+   * initial capacity and the given load factor.
+   *
+   * @param mixFunction the mix function
+   * @param initialCapacity the initial capacity
+   * @param loadFactor the load factor
+   * @since 1.0.0
+   */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  public SyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity, final float loadFactor) {
     final int capacity = initialCapacity >= SyncMap.MAXIMUM_CAPACITY
       ? SyncMap.MAXIMUM_CAPACITY
       : SyncMap.tableSizeFor(initialCapacity);
 
+    this.mixFunction = mixFunction;
     this.loadFactor = loadFactor;
     this.capacity = capacity;
 
@@ -358,7 +384,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V> node, nextNode;
     int nodeHash; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
       if((nodeHash = node.hash) == hash) {
@@ -416,7 +442,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V> node, nextNode;
     int nodeHash; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
       if((nodeHash = node.hash) == hash) {
@@ -475,7 +501,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V> node, nextNode;
     int nodeHash; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
       if((nodeHash = node.hash) == hash) {
@@ -534,7 +560,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable = null; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     V next;
     retry: for(; ; ) {
@@ -642,7 +668,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     V next; long count = 0L;
     retry: for(; ; ) {
@@ -738,7 +764,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable = null; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     V next; long count = 0L;
     retry: for(; ; ) {
@@ -866,7 +892,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable = null; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     retry: for(; ; ) {
       immutable = this.immutableTable; length = immutable.length;
@@ -961,7 +987,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable = null; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     retry: for(; ; ) {
       immutable = this.immutableTable; length = immutable.length;
@@ -1094,7 +1120,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     Object previous;
     retry: for(; ; ) {
@@ -1179,7 +1205,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     retry: for(; ; ) {
       immutable = this.immutableTable; length = immutable.length;
@@ -1266,7 +1292,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     Object previous;
     retry: for(; ; ) {
@@ -1343,7 +1369,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     Node<K, V>[] immutable, mutable; int length;
     Node<K, V> node; K nodeKey;
 
-    final int hash = SyncMap.spread(key.hashCode());
+    final int hash = this.mixFunction.mix(key.hashCode());
 
     Object previous;
     retry: for(; ; ) {
@@ -1472,11 +1498,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * {@inheritDoc}
    *
-   * <p>Creating an {@link Iterator} from this view, takes an immutable
-   * snapshot of the entries, meaning, modifications after calling
-   * {@link Set#iterator()} will not be visible. Calling
-   * {@link Iterator#remove()} will work provided the key-value pair is
-   * identical to the pair currently in the map.</p>
+   * <p>The {@link Iterator} produced by this view is weakly consistent: it
+   * iterates over an immutable snapshot captured at iterator creation time.
+   * New insertions after calling {@link Set#iterator()} are not reflected in
+   * the traversal.</p>
+   *
+   * <p>{@link Iterator#remove()} attempts to remove the last returned entry
+   * from the backing map, and succeeds only if the key still maps to the same
+   * value at the time of removal.</p>
    */
   @Override
   public Set<Map.Entry<K, V>> entrySet() {
