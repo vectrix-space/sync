@@ -24,7 +24,6 @@
 package space.vectrix.sync.collections;
 
 import java.util.Map;
-import org.jetbrains.annotations.NotNull;
 
 /**
  * Provides {@link SyncMap} specific test data for {@link AbstractMapTest}.
@@ -33,12 +32,12 @@ import org.jetbrains.annotations.NotNull;
  */
 public class SyncMapTest extends AbstractMapTest<String, String> {
   @Override
-  protected @NotNull Map<String, String> createMap() {
+  protected Map<String, String> createMap() {
     return new SyncMap<>();
   }
 
   @Override
-  protected @NotNull Map<String, String> populate(final @NotNull Map<String, String> map, final int elements) {
+  protected Map<String, String> populate(final Map<String, String> map, final int elements) {
     for(int i = 0; i < elements; i++) {
       map.put(this.key(i), this.value(i));
     }
@@ -47,12 +46,12 @@ public class SyncMapTest extends AbstractMapTest<String, String> {
   }
 
   @Override
-  protected @NotNull String key(final int index) {
+  protected String key(final int index) {
     return String.valueOf(index);
   }
 
   @Override
-  protected @NotNull String value(final int index) {
+  protected String value(final int index) {
     return String.valueOf(index);
   }
 }

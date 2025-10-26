@@ -47,14 +47,9 @@ dependencies {
 }
 
 spotless {
-  fun FormatExtension.applyCommon() {
-    trimTrailingWhitespace()
-    endWithNewline()
-    leadingTabsToSpaces(2)
-  }
-
   java {
     importOrderFile(rootProject.file(".spotless/vectrix.importorder"))
+    targetExclude("build/generated/**")
     applyCommon()
   }
 
