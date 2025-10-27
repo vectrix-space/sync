@@ -1,0 +1,31 @@
+variants:
+  double:
+    key: Double
+    group: doubles
+    keyPrimitive: double
+    keyObject: Double
+    keyJava: Double
+  float:
+    key: Float
+    group: floats
+    keyPrimitive: float
+    keyObject: Float
+    keyJava: Double
+  int:
+    key: Int
+    group: ints
+    keyPrimitive: int
+    keyObject: Integer
+    keyJava: Int
+  short:
+    key: Short
+    group: shorts
+    keyPrimitive: short
+    keyObject: Short
+    keyJava: Int
+  long:
+    key: Long
+    group: longs
+    keyPrimitive: long
+    keyObject: Long
+    keyJava: Long

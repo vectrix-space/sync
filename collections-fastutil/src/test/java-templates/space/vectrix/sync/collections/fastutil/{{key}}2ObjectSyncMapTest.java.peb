@@ -1,0 +1,35 @@
+package space.vectrix.sync.collections.fastutil;
+
+import it.unimi.dsi.fastutil.{{ group }}.{{ key }}2ObjectMap;
+
+/**
+ * Provides {@link {{ key }}2ObjectMap} specific test data for {@link {{ key }}2ObjectAbstractMapTest}.
+ *
+ * @since 1.0.0
+ */
+@SuppressWarnings({"deprecation"})
+public class {{ key }}2ObjectSyncMapTest extends {{ key }}2ObjectAbstractMapTest<String> {
+  @Override
+  protected {{ key }}2ObjectMap<String> createMap() {
+    return new {{ key }}2ObjectSyncMap<>();
+  }
+
+  @Override
+  protected {{ key }}2ObjectMap<String> populate(final {{ key }}2ObjectMap<String> map, final int elements) {
+    for(int i = 0; i < elements; i++) {
+      map.put(this.key(i), this.value(i));
+    }
+
+    return map;
+  }
+
+  @Override
+  protected {{ keyPrimitive }} key(final int index) {
+    return {{ keyObject }}.valueOf(String.valueOf(index));
+  }
+
+  @Override
+  protected String value(final int index) {
+    return String.valueOf(index);
+  }
+}

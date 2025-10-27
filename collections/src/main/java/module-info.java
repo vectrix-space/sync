@@ -5,8 +5,8 @@ import org.jspecify.annotations.NullMarked;
  */
 @NullMarked
 module space.vectrix.sync.collections {
-  requires transitive org.jspecify;
-  requires transitive org.jetbrains.annotations;
+  requires transitive static org.jspecify;
+  requires transitive static org.jetbrains.annotations;
 
   exports space.vectrix.sync.collections;
 }

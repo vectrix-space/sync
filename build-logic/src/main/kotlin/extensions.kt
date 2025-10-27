@@ -1,3 +1,4 @@
+import com.diffplug.gradle.spotless.FormatExtension
 import net.kyori.indra.git.IndraGitExtension
 import org.gradle.api.Project
 import org.gradle.api.tasks.bundling.Jar
@@ -19,4 +20,10 @@ fun Project.applyJarMetadata(moduleName: String) {
       indraGit?.applyVcsInformationToManifest(manifest)
     }
   }
+}
+
+fun FormatExtension.applyCommon() {
+  trimTrailingWhitespace()
+  endWithNewline()
+  leadingTabsToSpaces(2)
 }
