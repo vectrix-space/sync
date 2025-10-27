@@ -16,6 +16,7 @@
 Provides thread-safe utilities for highly concurrent scenarios in Java.
 
 * [Sync Collections](collections/readme.md)
+* [Sync Collections `fastutil`](collections-fastutil/readme.md)
 
 ## Building
 
