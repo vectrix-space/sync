@@ -1765,7 +1765,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         }
 
         this.capacity = length << 1;
-        {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, this.capacity);
+        {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, length);
         this.transferTable = destination = new Node[this.capacity];
         break;
       } else if(operation == StampLock.OPERATION_RESIZE
@@ -1921,6 +1921,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
           this.transferTable = null;
           this.mutableTable = destination;
+          this.amended = true;
           break;
         }
       }

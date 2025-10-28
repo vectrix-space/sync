@@ -1639,7 +1639,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         this.capacity = length << 1;
-        SyncMap.TRANSFER_INDEX.setRelease(this, this.capacity);
+        SyncMap.TRANSFER_INDEX.setRelease(this, length);
         this.transferTable = destination = new Node[this.capacity];
         break;
       } else if(operation == StampLock.OPERATION_RESIZE
@@ -1795,6 +1795,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
           this.transferTable = null;
           this.mutableTable = destination;
+          this.amended = true;
           break;
         }
       }
