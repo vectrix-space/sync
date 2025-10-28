@@ -86,7 +86,7 @@ public class Int2ObjectSyncMapBenchmark {
 
       if(this.prime) {
         if(this.map instanceof final Int2ObjectSyncMap<Integer> syncMap) {
-          syncMap.promote();
+          syncMap.promote(true);
         } else {
           for(int i = 0; i < this.size; i++) {
             this.map.get(i);
