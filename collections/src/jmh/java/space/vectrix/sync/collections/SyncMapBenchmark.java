@@ -88,7 +88,7 @@ public class SyncMapBenchmark {
 
       if(this.prime) {
         if(this.map instanceof final SyncMap<Integer, Integer> syncMap) {
-          syncMap.promote();
+          syncMap.promote(true);
         } else {
           for(int i = 0; i < this.size; i++) {
             this.map.get(i);

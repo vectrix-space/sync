@@ -1572,7 +1572,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public void forEach(final {{ key }}ObjectBiConsumer<? super V> consumer) {
     requireNonNull(consumer, "consumer");
 
-    this.promote();
+    this.promote(true);
 
     final Node<V>[] table = this.immutableTable;
     if(table.length > 0) {
@@ -1590,7 +1590,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   @Override
   public void clear() {
-    this.promote();
+    this.promote(true);
 
     final Node<V>[] table = this.immutableTable;
     if(table.length > 0) {
@@ -1642,98 +1642,6 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /* ------------------------ < Private Operations > ------------------------ */
 
   /**
-   * Records a missed attempt to grab a node from the immutable table. If the
-   * missed attempts exceeds the amount of elements in the map, the mutable
-   * table will then be promoted to the immutable table.
-   */
-  /* package */ void miss() {
-    this.misses.increment();
-
-    if(this.misses.sum() < this.size.sum()) return;
-    this.promote();
-  }
-
-  /**
-   * Locks for the initialize operation, then creates a mutable table to
-   * allow initial writes.
-   *
-   * @return the mutable table
-   */
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  /* package */ Node<V>@Nullable [] initialize() {
-    Node<V>[] source, destination;
-
-    long stamp = this.stampLock.getAcquire();
-    while((destination = this.mutableTable) == null && (source = this.immutableTable).length == 0 && stamp == StampLock.DEFAULT_STAMP) {
-      final long next = StampLock.pack(StampLock.MODE_INITIALIZE);
-      final long witness = this.stampLock.compareAndExchange(stamp, next);
-      if(witness != StampLock.DEFAULT_STAMP) {
-        stamp = witness;
-        Thread.onSpinWait();
-        continue;
-      }
-
-      if(source != this.immutableTable && this.mutableTable == null) {
-        this.stampLock.reset();
-        continue;
-      }
-
-      this.mutableTable = destination = new Node[this.capacity];
-      this.amended = true;
-
-      this.stampLock.reset();
-      break;
-    }
-
-    return destination;
-  }
-
-  /**
-   * Locks for the promotion operation, then replaces the immutable table with
-   * the mutable table and removes the mutable table.
-   */
-  /* package */ void promote() {
-    Node<V>[] source;
-
-    long stamp = this.stampLock.getAcquire();
-    while(stamp == StampLock.DEFAULT_STAMP && this.amended && (source = this.mutableTable) != null) {
-      final long next = StampLock.pack(StampLock.MODE_PROMOTE);
-      final long witness = this.stampLock.compareAndExchange(stamp, next);
-      if(witness != StampLock.DEFAULT_STAMP) {
-        stamp = witness;
-        Thread.onSpinWait();
-        continue;
-      }
-
-      if(!this.amended || source != this.mutableTable) {
-        this.stampLock.reset();
-        continue;
-      }
-
-      this.misses.reset();
-      this.amended = false;
-      this.mutableTable = null;
-      this.immutableTable = source;
-
-      this.stampLock.reset();
-      break;
-    }
-  }
-
-  /**
-   * Updates the size of the map by adding the given value. If the map is
-   * increasing in size, try to resize the mutable table.
-   *
-   * @param value the value to change the size by
-   */
-  /* package */ void addCount(final long value) {
-    this.size.add(value);
-
-    if(value <= 0L) return;
-    this.resize();
-  }
-
-  /**
    * Assists in transferring nodes from the old table to the new table, during
    * a resize.
    *
@@ -1750,6 +1658,79 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   }
 
   /**
+   * Updates the size of the map by adding the given value. If the map is
+   * increasing in size, try to resize the mutable table.
+   *
+   * @param value the value to change the size by
+   */
+  /* package */ void addCount(final long value) {
+    this.size.add(value);
+
+    if(value <= 0L) return;
+    this.resize();
+  }
+
+  /**
+   * Records a missed attempt to grab a node from the immutable table. If the
+   * missed attempts exceeds the amount of elements in the map, the mutable
+   * table will then be promoted to the immutable table.
+   */
+  /* package */ void miss() {
+    this.misses.increment();
+
+    if(this.misses.sum() < this.size.sum()) return;
+    this.promote(false);
+  }
+
+  /**
+   * Locks for the initialize operation, then creates a mutable table to
+   * allow initial writes.
+   *
+   * @return the mutable table
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  /* package */ Node<V>@Nullable [] initialize() {
+    Node<V>[] source, destination;
+
+    long state; int operation, version, nextVersion;
+    long next = StampLock.with(StampLock.OPERATION_INITIALIZE, StampLock.PHASE_RUNNING, 1, 0);
+
+    for(state = this.stampLock.getVolatile(); ; ) {
+      if((destination = this.mutableTable) != null || (source = this.immutableTable).length != 0) break;
+
+      operation = StampLock.operation(state);
+      version = StampLock.version(state);
+
+      if(operation == StampLock.OPERATION_NONE) {
+        next = StampLock.withVersion(next, (nextVersion = version + 1));
+
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        if(source != this.immutableTable || this.mutableTable != null) {
+          state = StampLock.withReset(nextVersion + 1);
+          this.stampLock.setVolatile(state);
+          Thread.onSpinWait();
+          continue;
+        }
+
+        this.mutableTable = destination = new Node[this.capacity];
+        this.amended = true;
+
+        state = StampLock.withReset(nextVersion + 1);
+        this.stampLock.setVolatile(state);
+        break;
+      }
+    }
+
+    return destination;
+  }
+
+  /**
    * Creates a new mutable table with an increased capacity from the previous
    * mutable table and transfers the nodes to it.
    */
@@ -1757,46 +1738,50 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /* package */ void resize() {
     Node<V>[] source, destination; int length;
 
-    long stamp = this.stampLock.getAcquire();
-    for(; ; ) {
+    long state; int operation, phase, count, version, nextVersion;
+    for(state = this.stampLock.getVolatile(); ; ) {
       if(!this.amended
         || (source = this.mutableTable) == null
         || (length = source.length) <= 0
         || (this.size.sum() * this.loadFactor) < length) return;
 
-      if(stamp == StampLock.DEFAULT_STAMP) {
-        final long next = StampLock.pack(StampLock.MODE_RESIZE);
-        final long witness = this.stampLock.compareAndExchange(stamp, next);
-        if(witness != StampLock.DEFAULT_STAMP) {
-          stamp = witness;
+      operation = StampLock.operation(state);
+      version = StampLock.version(state);
+
+      if(operation == StampLock.OPERATION_NONE) {
+        final long next = StampLock.with(StampLock.OPERATION_RESIZE, StampLock.PHASE_RUNNING, 1, (nextVersion = version + 1));
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
           Thread.onSpinWait();
           continue;
         }
 
         if(!this.amended || source != this.mutableTable) {
-          this.stampLock.reset();
+          state = StampLock.withReset(nextVersion + 1);
+          this.stampLock.setVolatile(state);
+          Thread.onSpinWait();
           continue;
         }
 
         this.capacity = length << 1;
-        {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, length);
+        {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, this.capacity);
         this.transferTable = destination = new Node[this.capacity];
         break;
-      } else if(StampLock.modeOf(stamp) == StampLock.MODE_RESIZE && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
-        final long count = StampLock.countOf(stamp);
-        if(count >= {{ key }}2ObjectSyncMap.MAXIMUM_TRANSFER_THREADS) {
-          return;
-        }
+      } else if(operation == StampLock.OPERATION_RESIZE
+        && StampLock.phase(state) == StampLock.PHASE_RUNNING
+        && (count = StampLock.count(state)) < {{ key }}2ObjectSyncMap.MAXIMUM_TRANSFER_THREADS) {
+        nextVersion = version;
 
         if((destination = this.transferTable) == null) {
           Thread.onSpinWait();
           continue;
         }
 
-        final long next = stamp + StampLock.ONE_COUNT;
-        final long witness = this.stampLock.compareAndExchange(stamp, next);
-        if(witness != stamp) {
-          stamp = witness;
+        final long next = StampLock.withCount(state, count + 1);
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
           Thread.onSpinWait();
           continue;
         }
@@ -1807,62 +1792,57 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       return;
     }
 
-    stamp = this.stampLock.getAcquire();
+    try {
+      if(this.transfer(source, destination, true) >= length) {
+        state = this.stampLock.getVolatile();
+        for(; ; ) {
+          if(StampLock.phase(state) != StampLock.PHASE_RUNNING) return;
 
-    final boolean achieved = StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING && this.transfer(source, destination, true) >= length;
-    if(achieved) {
-      stamp = this.stampLock.getAcquire();
+          final long next = StampLock.withPhase(state, StampLock.PHASE_ACHIEVED);
+          final long witness = this.stampLock.compareAndExchange(state, next);
+          if(witness != state) {
+            state = witness;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          this.transferTable = null;
+          this.mutableTable = destination;
+          break;
+        }
+      }
+    } finally {
+      state = this.stampLock.getVolatile();
       for(; ; ) {
-        if(StampLock.stageOf(stamp) != StampLock.STAGE_RUNNING) break;
+        long next = state;
 
-        final long next = StampLock.withStage(stamp, StampLock.STAGE_ACHIEVED);
-        final long witness = this.stampLock.compareAndExchange(stamp, next);
-        if(witness != stamp) {
-          stamp = witness;
+        if((count = StampLock.count(state)) == 0L) break;
+        count -= 1;
+        next = StampLock.withCount(next, count);
+
+        if((phase = StampLock.phase(state)) == StampLock.PHASE_FINALIZED) break;
+        final boolean finalize = (phase == StampLock.PHASE_ACHIEVED && count == 0);
+        if(finalize) {
+          next = StampLock.withPhase(next, StampLock.PHASE_FINALIZED);
+        }
+
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
           Thread.onSpinWait();
           continue;
         }
 
+        if(finalize) {
+          {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, 0);
+          {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
+
+          state = StampLock.withReset(nextVersion + 1);
+          this.stampLock.setVolatile(state);
+        }
+
         break;
       }
-    }
-
-    stamp = this.stampLock.getAcquire();
-    for(; ; ) {
-      long next = stamp;
-
-      long count = StampLock.countOf(stamp);
-      if(count == 0L) return;
-
-      count -= 1L;
-      next -= StampLock.ONE_COUNT;
-
-      final int stage = StampLock.stageOf(stamp);
-      if(stage == StampLock.STAGE_FINALIZING) return;
-
-      final boolean finalize = (stage == StampLock.STAGE_ACHIEVED && count == 0);
-      if(finalize) {
-        next = StampLock.withStage(next, StampLock.STAGE_FINALIZING);
-      }
-
-      final long witness = this.stampLock.compareAndExchange(stamp, next);
-      if(witness != stamp) {
-        stamp = witness;
-        Thread.onSpinWait();
-        continue;
-      }
-
-      if(finalize) {
-        {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, 0);
-        {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
-
-        this.transferTable = null;
-        this.mutableTable = destination;
-
-        this.stampLock.reset();
-      }
-
-      break;
     }
   }
 
@@ -1874,45 +1854,46 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /* package */ void amend() {
     Node<V>[] source, destination; int length;
 
-    long stamp = this.stampLock.getAcquire();
-    for(; ; ) {
-      if(this.amended || this.mutableTable != null) return;
+    long state; int operation, phase, count, version, nextVersion;
+    for(state = this.stampLock.getVolatile(); ; ) {
+      if(this.amended || this.mutableTable != null || (length = (source = this.immutableTable).length) == 0) return;
 
-      source = this.immutableTable;
-      length = source.length;
+      operation = StampLock.operation(state);
+      version = StampLock.version(state);
 
-      if(stamp == StampLock.DEFAULT_STAMP) {
-        final long next = StampLock.pack(StampLock.MODE_AMEND);
-        final long witness = this.stampLock.compareAndExchange(stamp, next);
-        if(witness != StampLock.DEFAULT_STAMP) {
-          stamp = witness;
+      if(operation == StampLock.OPERATION_NONE) {
+        final long next = StampLock.with(StampLock.OPERATION_AMEND, StampLock.PHASE_RUNNING, 1, (nextVersion = version + 1));
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
           Thread.onSpinWait();
           continue;
         }
 
-        if(this.amended || source != this.immutableTable || this.mutableTable != null) {
-          this.stampLock.reset();
+        if(this.amended || this.mutableTable != null || source != this.immutableTable) {
+          state = StampLock.withReset(nextVersion + 1);
+          this.stampLock.setVolatile(state);
+          Thread.onSpinWait();
           continue;
         }
 
         {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, length);
         this.transferTable = destination = new Node[length];
         break;
-      } else if(StampLock.modeOf(stamp) == StampLock.MODE_AMEND && StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING) {
-        final long count = StampLock.countOf(stamp);
-        if(count >= {{ key }}2ObjectSyncMap.MAXIMUM_TRANSFER_THREADS) {
-          return;
-        }
+      } else if(operation == StampLock.OPERATION_AMEND
+        && StampLock.phase(state) == StampLock.PHASE_RUNNING
+        && (count = StampLock.count(state)) < {{ key }}2ObjectSyncMap.MAXIMUM_TRANSFER_THREADS) {
+        nextVersion = version;
 
         if((destination = this.transferTable) == null) {
           Thread.onSpinWait();
           continue;
         }
 
-        final long next = stamp + StampLock.ONE_COUNT;
-        final long witness = this.stampLock.compareAndExchange(stamp, next);
-        if(witness != stamp) {
-          stamp = witness;
+        final long next = StampLock.withCount(state, count + 1);
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
           Thread.onSpinWait();
           continue;
         }
@@ -1923,63 +1904,109 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       return;
     }
 
-    stamp = this.stampLock.getAcquire();
+    try {
+      if(this.size.sum() <= 0L) return;
+      if(this.transfer(source, destination, false) >= length) {
+        state = this.stampLock.getVolatile();
+        for(; ; ) {
+          if(StampLock.phase(state) != StampLock.PHASE_RUNNING) return;
 
-    final boolean achieved = StampLock.stageOf(stamp) == StampLock.STAGE_RUNNING && (this.size.sum() <= 0L || this.transfer(source, destination, false) >= length);
-    if(achieved) {
-      stamp = this.stampLock.getAcquire();
+          final long next = StampLock.withPhase(state, StampLock.PHASE_ACHIEVED);
+          final long witness = this.stampLock.compareAndExchange(state, next);
+          if(witness != state) {
+            state = witness;
+            Thread.onSpinWait();
+            continue;
+          }
+
+          this.transferTable = null;
+          this.mutableTable = destination;
+          break;
+        }
+      }
+    } finally {
+      state = this.stampLock.getVolatile();
       for(; ; ) {
-        if(StampLock.stageOf(stamp) != StampLock.STAGE_RUNNING) break;
+        long next = state;
 
-        final long next = StampLock.withStage(stamp, StampLock.STAGE_ACHIEVED);
-        final long witness = this.stampLock.compareAndExchange(stamp, next);
-        if(witness != stamp) {
-          stamp = witness;
+        if((count = StampLock.count(state)) == 0L) break;
+        count -= 1;
+        next = StampLock.withCount(next, count);
+
+        if((phase = StampLock.phase(state)) == StampLock.PHASE_FINALIZED) break;
+        final boolean finalize = (phase == StampLock.PHASE_ACHIEVED && count == 0);
+        if(finalize) {
+          next = StampLock.withPhase(next, StampLock.PHASE_FINALIZED);
+        }
+
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
           Thread.onSpinWait();
           continue;
+        }
+
+        if(finalize) {
+          {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, 0);
+          {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
+
+          state = StampLock.withReset(nextVersion + 1);
+          this.stampLock.setVolatile(state);
         }
 
         break;
       }
     }
+  }
 
-    stamp = this.stampLock.getAcquire();
-    for(; ; ) {
-      long next = stamp;
+  /**
+   * Locks for the promotion operation, then replaces the immutable table with
+   * the mutable table and removes the mutable table.
+   *
+   * @param wait whether to wait until we can promote
+   */
+  /* package */ void promote(final boolean wait) {
+    Node<V>[] source;
 
-      long count = StampLock.countOf(stamp);
-      if(count == 0L) return;
+    long state; int operation, version, nextVersion;
+    long next = StampLock.with(StampLock.OPERATION_PROMOTE, StampLock.PHASE_RUNNING, 1, 0);
 
-      count -= 1L;
-      next -= StampLock.ONE_COUNT;
+    for(state = this.stampLock.getVolatile(); ; ) {
+      if(!this.amended || (source = this.mutableTable) == null) break;
 
-      final int stage = StampLock.stageOf(stamp);
-      if(stage == StampLock.STAGE_FINALIZING) return;
+      operation = StampLock.operation(state);
+      version = StampLock.version(state);
 
-      final boolean finalize = (stage == StampLock.STAGE_ACHIEVED && count == 0);
-      if(finalize) {
-        next = StampLock.withStage(next, StampLock.STAGE_FINALIZING);
-      }
+      if(operation == StampLock.OPERATION_NONE) {
+        next = StampLock.withVersion(next, (nextVersion = version + 1));
 
-      final long witness = this.stampLock.compareAndExchange(stamp, next);
-      if(witness != stamp) {
-        stamp = witness;
+        final long witness = this.stampLock.compareAndExchange(state, next);
+        if(witness != state) {
+          state = witness;
+          Thread.onSpinWait();
+          continue;
+        }
+
+        if(!this.amended || source != this.mutableTable) {
+          state = StampLock.withReset(nextVersion + 1);
+          this.stampLock.setVolatile(state);
+          Thread.onSpinWait();
+          continue;
+        }
+
+        this.misses.reset();
+        this.amended = false;
+        this.mutableTable = null;
+        this.immutableTable = source;
+
+        state = StampLock.withReset(nextVersion + 1);
+        this.stampLock.setVolatile(state);
+        break;
+      } else if(wait && operation != StampLock.OPERATION_PROMOTE) {
         Thread.onSpinWait();
-        continue;
+      } else {
+        break;
       }
-
-      if(finalize) {
-        {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, 0);
-        {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
-
-        this.transferTable = null;
-        this.mutableTable = destination;
-        this.amended = true;
-
-        this.stampLock.reset();
-      }
-
-      break;
     }
   }
 
@@ -2132,122 +2159,113 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * resizing, and amending.
    */
   /* package */ static final class StampLock {
-    /* package */ static final long DEFAULT_STAMP = 0L;
 
-    /*
-     * Stamp mode for bulk table updates.
-     */
-    /* package */ static final int MODE_PROMOTE = 1;
-    /* package */ static final int MODE_RESIZE = 2;
-    /* package */ static final int MODE_AMEND = 3;
-    /* package */ static final int MODE_INITIALIZE = 4;
+    // Constants
 
-    /*
-     * Stamp stage for bulk table updates.
-     */
-    /* package */ static final int STAGE_RUNNING = 1;
-    /* package */ static final int STAGE_ACHIEVED = 2;
-    /* package */ static final int STAGE_FINALIZING = 3;
+    /* package */ static final int OPERATION_NONE = 0;
 
-    /*
-     * Shift for the stamp.
-     */
-    /* package */ static final int SHIFT_MODE = 0;
-    /* package */ static final int SHIFT_STAGE = 3;
-    /* package */ static final int SHIFT_COUNT = 6;
+    /* package */ static final int OPERATION_INITIALIZE = 1;
+    /* package */ static final int OPERATION_RESIZE = 2;
+    /* package */ static final int OPERATION_AMEND = 3;
+    /* package */ static final int OPERATION_PROMOTE = 4;
 
-    /*
-     * Mask for the stamp.
-     */
-    /* package */ static final long MASK_MODE = 0b111;
-    /* package */ static final long MASK_STAGE = 0b111;
+    /* package */ static final int PHASE_IDLE = 0;
+    /* package */ static final int PHASE_RUNNING = 1;
+    /* package */ static final int PHASE_ACHIEVED = 2;
+    /* package */ static final int PHASE_FINALIZED = 3;
 
-    /* package */ static final long ONE_COUNT = 1L << StampLock.SHIFT_COUNT;
+    /* package */ static final int OPERATION_SHIFT = 0;
+    /* package */ static final long OPERATION_MASK = 0b111L;
 
-    /**
-     * Returns a packed {@code long} stamp with the given mode, running stage,
-     * and thread count of {@code 1}.
-     *
-     * @param mode the mode
-     * @return the packed stamp
-     */
-    /* package */ static long pack(final int mode) {
-      return ((long) mode & 7L) << StampLock.SHIFT_MODE
-        | ((long) StampLock.STAGE_RUNNING & 7L) << StampLock.SHIFT_STAGE
-        | 1L << StampLock.SHIFT_COUNT;
-    }
+    /* package */ static final int PHASE_SHIFT = 3;
+    /* package */ static final long PHASE_MASK = 0b111L;
 
-    /**
-     * Returns the mode from the packed stamp.
-     *
-     * @param stamp the packed stamp
-     * @return the mode
-     */
-    /* package */ static int modeOf(final long stamp) {
-      return (int) ((stamp >>> StampLock.SHIFT_MODE) & StampLock.MASK_MODE);
-    }
+    /* package */ static final int COUNT_SHIFT = 6;
+    /* package */ static final long COUNT_MASK = (1L << 16) - 1;
 
-    /**
-     * Returns the stage from the packed stamp.
-     *
-     * @param stamp the packed stamp
-     * @return the stage
-     */
-    /* package */ static int stageOf(final long stamp) {
-      return (int) ((stamp >>> StampLock.SHIFT_STAGE) & StampLock.MASK_STAGE);
-    }
+    /* package */ static final int VERSION_SHIFT = 32;
+    /* package */ static final long VERSION_MASK = (1L << 32) - 1;
 
-    /**
-     * Returns the count from the packet stamp.
-     *
-     * @param stamp the packed stamp
-     * @return the count
-     */
-    /* package */ static long countOf(final long stamp) {
-      return stamp >>> StampLock.SHIFT_COUNT;
-    }
+    // Reflection
 
-    /**
-     * Returns the packed stamp with the given stage applied.
-     *
-     * @param stamp the packed stamp
-     * @param newStage the new stage
-     * @return the packed stamp, with the new stage
-     */
-    /* package */ static long withStage(final long stamp, final int newStage) {
-      final long stageMask = StampLock.MASK_STAGE << StampLock.SHIFT_STAGE;
-      return (stamp & ~stageMask) | (((long) newStage & 7L) << StampLock.SHIFT_STAGE);
-    }
-
-    private static final VarHandle STAMP;
+    private static final VarHandle STATE;
 
     static {
       try {
         final MethodHandles.Lookup lookup = MethodHandles.lookup();
 
-        STAMP = lookup.findVarHandle(StampLock.class, "stamp", long.class);
+        STATE = lookup.findVarHandle(StampLock.class, "state", long.class);
       } catch(final Exception exception) {
         throw new ExceptionInInitializerError(exception);
       }
     }
 
-    @SuppressWarnings({"FieldCanBeLocal", "FieldMayBeFinal"})
-    private long stamp;
+    // Packing
 
-    /* package */ StampLock() {
-      this.stamp = StampLock.DEFAULT_STAMP;
+    /* package */ static int operation(final long state) {
+      return (int) ((state >>> StampLock.OPERATION_SHIFT) & StampLock.OPERATION_MASK);
     }
 
-    /* package */ long getAcquire() {
-      return (long) StampLock.STAMP.getAcquire(this);
+    /* package */ static int phase(final long state) {
+      return (int) ((state >>> StampLock.PHASE_SHIFT) & StampLock.PHASE_MASK);
+    }
+
+    /* package */ static int count(final long state) {
+      return (int) ((state >>> StampLock.COUNT_SHIFT) & StampLock.COUNT_MASK);
+    }
+
+    /* package */ static int version(final long state) {
+      return (int) ((state >>> StampLock.VERSION_SHIFT) & StampLock.VERSION_MASK);
+    }
+
+    /* package */ static long with(final int operation, final int phase, final int count, final int version) {
+      return ((long) operation & StampLock.OPERATION_MASK) << StampLock.OPERATION_SHIFT
+        | ((long) phase & StampLock.PHASE_MASK) << StampLock.PHASE_SHIFT
+        | ((long) count & StampLock.COUNT_MASK) << StampLock.COUNT_SHIFT
+        | ((long) version & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT;
+    }
+
+    /* package */ static long withReset(final int version) {
+      return StampLock.with(StampLock.OPERATION_NONE, StampLock.PHASE_IDLE, 0, version);
+    }
+
+    /* package */ static long withPhase(final long state, final int phase) {
+      return (state & ~(StampLock.PHASE_MASK << StampLock.PHASE_SHIFT)) | (((long) phase & StampLock.PHASE_MASK) << StampLock.PHASE_SHIFT);
+    }
+
+    /* package */ static long withCount(final long state, final int count) {
+      return (state & ~(StampLock.COUNT_MASK << StampLock.COUNT_SHIFT)) | (((long) count & StampLock.COUNT_MASK) << StampLock.COUNT_SHIFT);
+    }
+
+    /* package */ static long withVersion(final long state, final int version) {
+      return (state & ~(StampLock.VERSION_MASK << StampLock.VERSION_SHIFT)) | (((long) version & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT);
+    }
+
+    /* package */ static long incrementVersion(final long state) {
+      final int next = (StampLock.version(state) + 1) & (int) StampLock.VERSION_MASK;
+      return (state & ~(StampLock.VERSION_MASK << StampLock.VERSION_SHIFT)) | (((long) next & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT);
+    }
+
+    // Fields
+
+    @SuppressWarnings({"FieldCanBeLocal", "FieldMayBeFinal"})
+    private long state = 0L;
+
+    // Operations
+
+    /* package */ StampLock() {
+    }
+
+    /* package */ long getVolatile() {
+      return (long) StampLock.STATE.getVolatile(this);
+    }
+
+    /* package */ void setVolatile(final long update) {
+      StampLock.STATE.setVolatile(this, update);
     }
 
     /* package */ long compareAndExchange(final long expect, final long update) {
-      return (long) StampLock.STAMP.compareAndExchangeRelease(this, expect, update);
-    }
-
-    /* package */ void reset() {
-      StampLock.STAMP.setRelease(this, StampLock.DEFAULT_STAMP);
+      return (long) StampLock.STATE.compareAndExchange(this, expect, update);
     }
   }
 
@@ -2506,7 +2524,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     @Override
     public ObjectIterator<{{ key }}2ObjectMap.Entry<V>> iterator() {
-      {{ key }}2ObjectSyncMap.this.promote();
+      {{ key }}2ObjectSyncMap.this.promote(true);
       return new EntryIterator({{ key }}2ObjectSyncMap.this.immutableTable);
     }
   }
