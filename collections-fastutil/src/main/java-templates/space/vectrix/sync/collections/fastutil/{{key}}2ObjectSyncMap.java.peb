@@ -379,12 +379,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && node.key == key) {
-        return node.reference().valueExists();
+        return node.referencePlain().valueExists();
       }
 
-      while((node = node.next()) != null) {
+      while((node = node.nextPlain()) != null) {
         if(node.hash == hash && node.key == key) {
-          return node.reference().valueExists();
+          return node.referencePlain().valueExists();
         }
       }
     }
@@ -439,12 +439,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && node.key == key) {
-        return node.reference().value();
+        return node.referencePlain().value();
       }
 
-      while((node = node.next()) != null) {
+      while((node = node.nextPlain()) != null) {
         if(node.hash == hash && node.key == key) {
-          return node.reference().value();
+          return node.referencePlain().value();
         }
       }
     }
@@ -501,12 +501,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && node.key == key) {
-        return node.reference().valueOr(defaultValue);
+        return node.referencePlain().valueOr(defaultValue);
       }
 
-      while((node = node.next()) != null) {
+      while((node = node.nextPlain()) != null) {
         if(node.hash == hash && node.key == key) {
-          return node.reference().valueOr(defaultValue);
+          return node.referencePlain().valueOr(defaultValue);
         }
       }
     }
@@ -1579,7 +1579,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
       Node<V> node;
       while((node = traverser.advanceNode()) != null) {
-        final Object current = node.reference().get();
+        final Object current = node.referencePlain().get();
         if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) continue;
 
         consumer.accept(node.key, (V) current);
@@ -1597,7 +1597,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
       Node<V> node; long count = 0L;
       while((node = traverser.advanceNode()) != null) {
-        final ObjectReference reference = node.reference();
+        final ObjectReference reference = node.referencePlain();
         Object current = reference.get();
         for(; ; ) {
           if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) continue;
@@ -2586,7 +2586,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
       Node<V> node;
       while((node = this.advanceNode()) != null) {
-        final Object current = node.reference().get();
+        final Object current = node.referencePlain().get();
         if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) continue;
 
         this.next = new MapEntry(node.key, (V) current);
@@ -2614,7 +2614,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     /* package */ final @Nullable Node<V> advanceNode() {
       Node<V> node;
       if((node = this.next) != null) {
-        node = node.next();
+        node = node.nextPlain();
       }
 
       for(; ; ) {
