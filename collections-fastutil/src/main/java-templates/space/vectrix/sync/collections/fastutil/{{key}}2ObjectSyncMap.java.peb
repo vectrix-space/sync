@@ -69,7 +69,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /**
    * Represents the default load factor for resizing this map.
    */
-  /* package */ static final float DEFAULT_LOAD_FACTOR = 0.75F;
+  /* package */ static final float DEFAULT_LOAD_FACTOR = 0.85F;
 
   /**
    * Represents the maximum number of threads that can participate in a
@@ -153,26 +153,35 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    *
    * @param table the node array
    * @param index the index
-   * @param <V> the value type
    * @return the node, or null
    */
-  @SuppressWarnings("unchecked")
-  /* package */ static <V> @Nullable Node<V> getNode(final Node<V>[] table, final int index) {
-    return (Node<V>) {{ key }}2ObjectSyncMap.NODE_ARRAY.getAcquire(table, index);
+  /* package */ static @Nullable Node getNodePlain(final Node[] table, final int index) {
+    return (Node) {{ key }}2ObjectSyncMap.NODE_ARRAY.get(table, index);
+  }
+
+  /**
+   * Returns the {@link Node} at the given {@code index}, if present, otherwise
+   * {@code null}.
+   *
+   * @param table the node array
+   * @param index the index
+   * @return the node, or null
+   */
+  /* package */ static @Nullable Node getNode(final Node[] table, final int index) {
+    return (Node) {{ key }}2ObjectSyncMap.NODE_ARRAY.getAcquire(table, index);
   }
 
   /**
    * Atomically compare and swaps the {@link Node} at the given {@code index}
    * from the {@code oldNode} to the {@code newNode}.
    *
-   * @param <V>      the value type
    * @param table    the node array
    * @param index    the index
    * @param nextNode the new node
    * @return true if new node was set, otherwise false
    */
-  /* package */ static <V> boolean replaceNode(final Node<V>[] table, final int index, final @Nullable Node<V> nextNode) {
-    return {{ key }}2ObjectSyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node<V>) null, nextNode) == null;
+  /* package */ static boolean replaceNode(final Node[] table, final int index, final @Nullable Node nextNode) {
+    return {{ key }}2ObjectSyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node) null, nextNode) == null;
   }
 
   /**
@@ -181,9 +190,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param table the node array
    * @param index the index
    * @param node the node
-   * @param <V> the value type
    */
-  /* package */ static <V> void setNode(final Node<V>[] table, final int index, final @Nullable Node<V> node) {
+  /* package */ static void setNode(final Node[] table, final int index, final @Nullable Node node) {
     {{ key }}2ObjectSyncMap.NODE_ARRAY.setRelease(table, index, node);
   }
 
@@ -203,18 +211,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Represents an immutable hash table that allows fast retrieval and updates
    * without locking.
    */
-  /* package */ transient volatile Node<V>[] immutableTable;
+  /* package */ transient volatile Node[] immutableTable;
 
   /**
    * Represents a mutable hash table that allows updates of new nodes with
    * locking.
    */
-  private transient volatile Node<V>@Nullable [] mutableTable;
+  private transient volatile Node@Nullable [] mutableTable;
 
   /**
    * Represents a temporary transfer hash table, used in transfer operations.
    */
-  private transient volatile Node<V>@Nullable [] transferTable;
+  private transient volatile Node@Nullable [] transferTable;
 
   /**
    * Represents whether the mutable table has been amended by the immutable
@@ -261,7 +269,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /**
    * Represents a view of the entries in this map.
    */
-  private transient @Nullable EntrySet entrySet;
+  private transient volatile @Nullable EntrySet entrySet;
 
   /* ------------------------- < Public Operations > ------------------------- */
 
@@ -330,7 +338,6 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param loadFactor the load factor
    * @since 1.0.0
    */
-  @SuppressWarnings({"rawtypes", "unchecked"})
   public {{ key }}2ObjectSyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity, final float loadFactor) {
     final int capacity = initialCapacity >= {{ key }}2ObjectSyncMap.MAXIMUM_CAPACITY
       ? {{ key }}2ObjectSyncMap.MAXIMUM_CAPACITY
@@ -358,26 +365,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   @Override
   public boolean containsKey(final {{ keyPrimitive }} key) {
-    Node<V>[] table = this.immutableTable; int length = table.length;
-    Node<V> node, nextNode;
-    int nodeHash;
+    Node[] table = this.immutableTable; int length = table.length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
-      if((nodeHash = node.hash) == hash) {
-        if(node.key == key) {
-          return node.reference().valueExists();
-        }
-      } else if(nodeHash < 0) {
-        if((nextNode = node.find(hash, key)) != null) {
-          return nextNode.reference().valueExists();
-        }
+      if(node.hash == hash && node.key == key) {
+        return node.referencePlain().valueExists();
       }
 
-      while((node = node.next()) != null) {
+      while((node = node.nextPlain()) != null) {
         if(node.hash == hash && node.key == key) {
-          return node.reference().valueExists();
+          return node.referencePlain().valueExists();
         }
       }
     }
@@ -385,12 +385,14 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       boolean exists = false;
       retry: if((node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
+        final int nodeHash;
         if((nodeHash = node.hash) == hash) {
           if(node.key == key) {
             exists = node.reference().valueExists();
             break retry;
           }
         } else if(nodeHash < 0) {
+          final Node nextNode;
           if((nextNode = node.find(hash, key)) != null) {
             exists = nextNode.reference().valueExists();
             break retry;
@@ -423,26 +425,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   @Override
   public @Nullable V get(final {{ keyPrimitive }} key) {
-    Node<V>[] table = this.immutableTable; int length = table.length;
-    Node<V> node, nextNode;
-    int nodeHash;
+    Node[] table = this.immutableTable; int length = table.length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
-      if((nodeHash = node.hash) == hash) {
-        if(node.key == key) {
-          return node.reference().value();
-        }
-      } else if(nodeHash < 0) {
-        if((nextNode = node.find(hash, key)) != null) {
-          return nextNode.reference().value();
-        }
+      if(node.hash == hash && node.key == key) {
+        return node.referencePlain().value();
       }
 
-      while((node = node.next()) != null) {
+      while((node = node.nextPlain()) != null) {
         if(node.hash == hash && node.key == key) {
-          return node.reference().value();
+          return node.referencePlain().value();
         }
       }
     }
@@ -450,12 +445,14 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       V value = null;
       retry: if((node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
+        final int nodeHash;
         if((nodeHash = node.hash) == hash) {
           if(node.key == key) {
             value = node.reference().value();
             break retry;
           }
         } else if(nodeHash < 0) {
+          final Node nextNode;
           if((nextNode = node.find(hash, key)) != null) {
             value = nextNode.reference().value();
             break retry;
@@ -490,26 +487,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public V getOrDefault(final {{ keyPrimitive }} key, final V defaultValue) {
     requireNonNull(defaultValue, "defaultValue");
 
-    Node<V>[] table = this.immutableTable; int length = table.length;
-    Node<V> node, nextNode;
-    int nodeHash;
+    Node[] table = this.immutableTable; int length = table.length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
-      if((nodeHash = node.hash) == hash) {
-        if(node.key == key) {
-          return node.reference().valueOr(defaultValue);
-        }
-      } else if(nodeHash < 0) {
-        if((nextNode = node.find(hash, key)) != null) {
-          return nextNode.reference().valueOr(defaultValue);
-        }
+      if(node.hash == hash && node.key == key) {
+        return node.referencePlain().valueOr(defaultValue);
       }
 
-      while((node = node.next()) != null) {
+      while((node = node.nextPlain()) != null) {
         if(node.hash == hash && node.key == key) {
-          return node.reference().valueOr(defaultValue);
+          return node.referencePlain().valueOr(defaultValue);
         }
       }
     }
@@ -517,12 +507,14 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       V value = defaultValue;
       retry: if((node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
+        final int nodeHash;
         if((nodeHash = node.hash) == hash) {
           if(node.key == key) {
             value = node.reference().valueOr(defaultValue);
             break retry;
           }
         } else if(nodeHash < 0) {
+          final Node nextNode;
           if((nextNode = node.find(hash, key)) != null) {
             value = nextNode.reference().valueOr(defaultValue);
             break retry;
@@ -549,8 +541,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V computeIfAbsent(final {{ keyPrimitive }} key, final {{ keyJava }}Function<? extends @Nullable V> mappingFunction) {
     requireNonNull(mappingFunction, "mappingFunction");
 
-    Node<V>[] immutable, mutable = null; int length;
-    Node<V> node;
+    Node[] immutable, mutable = null; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -602,19 +594,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         next = mappingFunction.apply(key);
         if(next == null) return null;
 
-        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node(hash, key, new ObjectReference(next)))) {
           break;
         }
 
         Thread.onSpinWait();
       } else if(node.hash == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-        mutable = this.forward((ForwardingNode<V>) node);
+        mutable = this.forward((ForwardingNode) node);
       } else {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   if(previous != null && previous != {{ key }}2ObjectSyncMap.EXPUNGED) return (V) previous;
@@ -633,12 +625,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                 }
               }
 
-              final Node<V> previousNode = node;
-              if((node = node.next()) == null) {
+              final Node previousNode = node;
+              if((node = node.nextPlain()) == null) {
                 next = mappingFunction.apply(key);
                 if(next == null) return null;
 
-                previousNode.next(new Node<>(hash, key, new ObjectReference(next)));
+                previousNode.next(new Node(hash, key, new ObjectReference(next)));
                 break retry;
               }
             }
@@ -656,8 +648,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V computeIfAbsent(final {{ keyPrimitive }} key, final {{ key }}2ObjectFunction<? extends @Nullable V> mappingFunction) {
     requireNonNull(mappingFunction, "mappingFunction");
 
-    Node<V>[] immutable, mutable = null; int length;
-    Node<V> node;
+    Node[] immutable, mutable = null; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -709,19 +701,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         next = mappingFunction.get(key);
         if(next == null) return null;
 
-        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node(hash, key, new ObjectReference(next)))) {
           break;
         }
 
         Thread.onSpinWait();
       } else if(node.hash == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-        mutable = this.forward((ForwardingNode<V>) node);
+        mutable = this.forward((ForwardingNode) node);
       } else {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   if(previous != null && previous != {{ key }}2ObjectSyncMap.EXPUNGED) return (V) previous;
@@ -740,12 +732,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                 }
               }
 
-              final Node<V> previousNode = node;
-              if((node = node.next()) == null) {
+              final Node previousNode = node;
+              if((node = node.nextPlain()) == null) {
                 next = mappingFunction.get(key);
                 if(next == null) return null;
 
-                previousNode.next(new Node<>(hash, key, new ObjectReference(next)));
+                previousNode.next(new Node(hash, key, new ObjectReference(next)));
                 break retry;
               }
             }
@@ -771,8 +763,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V computeIfPresent(final {{ keyPrimitive }} key, final BiFunction<? super {{ keyObject }}, ? super V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(remappingFunction, "remappingFunction");
 
-    Node<V>[] immutable, mutable; int length;
-    Node<V> node;
+    Node[] immutable, mutable; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -816,10 +808,10 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       final int index;
       if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
-            for(Node<V> previousNode = null; ; ) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
+            for(Node previousNode = null; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   if(previous == null || previous == {{ key }}2ObjectSyncMap.EXPUNGED) return null;
@@ -834,9 +826,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
                   if(next == null) {
                     if(previousNode != null) {
-                      previousNode.next(node.next());
+                      previousNode.next(node.nextPlain());
                     } else {
-                      {{ key }}2ObjectSyncMap.setNode(mutable, index, node.next());
+                      {{ key }}2ObjectSyncMap.setNode(mutable, index, node.nextPlain());
                     }
 
                     count = -1L;
@@ -848,7 +840,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
               previousNode = node;
 
-              if((node = node.next()) == null) {
+              if((node = node.nextPlain()) == null) {
                 return null;
               }
             }
@@ -866,8 +858,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V compute(final {{ keyPrimitive }} key, final BiFunction<? super {{ keyObject }}, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(remappingFunction, "remappingFunction");
 
-    Node<V>[] immutable, mutable = null; int length;
-    Node<V> node;
+    Node[] immutable, mutable = null; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -925,20 +917,20 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         next = remappingFunction.apply(key, null);
         if(next == null) return null;
 
-        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node(hash, key, new ObjectReference(next)))) {
           count = 1L;
           break;
         }
 
         Thread.onSpinWait();
       } else if(node.hash == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-        mutable = this.forward((ForwardingNode<V>) node);
+        mutable = this.forward((ForwardingNode) node);
       } else {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
-            for(Node<V> previousNode = null; ; ) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
+            for(Node previousNode = null; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   next = remappingFunction.apply(key, previous == {{ key }}2ObjectSyncMap.EXPUNGED ? null : (V) previous);
@@ -955,9 +947,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                     count = 1L;
                   } else if(next == null && (witness != null && witness != {{ key }}2ObjectSyncMap.EXPUNGED)) {
                     if(previousNode != null) {
-                      previousNode.next(node.next());
+                      previousNode.next(node.nextPlain());
                     } else {
-                      {{ key }}2ObjectSyncMap.setNode(mutable, index, node.next());
+                      {{ key }}2ObjectSyncMap.setNode(mutable, index, node.nextPlain());
                     }
 
                     count = -1L;
@@ -969,11 +961,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
               previousNode = node;
 
-              if((node = node.next()) == null) {
+              if((node = node.nextPlain()) == null) {
                 next = remappingFunction.apply(key, null);
                 if(next == null) return null;
 
-                previousNode.next(new Node<>(hash, key, new ObjectReference(next)));
+                previousNode.next(new Node(hash, key, new ObjectReference(next)));
 
                 count = 1L;
                 break retry;
@@ -993,8 +985,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V putIfAbsent(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
-    Node<V>[] immutable, mutable = null; int length;
-    Node<V> node;
+    Node[] immutable, mutable = null; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -1039,19 +1031,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
         Thread.onSpinWait();
       } else if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
-        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(value)))) {
+        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node(hash, key, new ObjectReference(value)))) {
           break;
         }
 
         Thread.onSpinWait();
       } else if(node.hash == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-        mutable = this.forward((ForwardingNode<V>) node);
+        mutable = this.forward((ForwardingNode) node);
       } else {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   if(previous != null && previous != {{ key }}2ObjectSyncMap.EXPUNGED) return (V) previous;
@@ -1067,9 +1059,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                 }
               }
 
-              final Node<V> previousNode = node;
-              if((node = node.next()) == null) {
-                previousNode.next(new Node<>(hash, key, new ObjectReference(value)));
+              final Node previousNode = node;
+              if((node = node.nextPlain()) == null) {
+                previousNode.next(new Node(hash, key, new ObjectReference(value)));
                 break retry;
               }
             }
@@ -1087,8 +1079,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V put(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
-    Node<V>[] immutable, mutable = null; int length;
-    Node<V> node;
+    Node[] immutable, mutable = null; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -1133,19 +1125,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
         Thread.onSpinWait();
       } else if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
-        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(value)))) {
+        if({{ key }}2ObjectSyncMap.replaceNode(mutable, index, new Node(hash, key, new ObjectReference(value)))) {
           break;
         }
 
         Thread.onSpinWait();
       } else if(node.hash == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-        mutable = this.forward((ForwardingNode<V>) node);
+        mutable = this.forward((ForwardingNode) node);
       } else {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   final Object witness = reference.compareAndExchange(previous, value);
@@ -1163,9 +1155,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                 }
               }
 
-              final Node<V> previousNode = node;
-              if((node = node.next()) == null) {
-                previousNode.next(new Node<>(hash, key, new ObjectReference(value)));
+              final Node previousNode = node;
+              if((node = node.nextPlain()) == null) {
+                previousNode.next(new Node(hash, key, new ObjectReference(value)));
                 break retry;
               }
             }
@@ -1179,32 +1171,32 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   }
 
   /* package */ void amendNode(final int hash, final {{ keyPrimitive }} key, final ObjectReference reference) {
-    Node<V>[] table = this.mutableTable;
+    Node[] table = this.mutableTable;
 
-    for(Node<V> node; ; ) {
+    for(Node node; ; ) {
       final int length, index;
       if(!this.amended || (table == null && (table = this.mutableTable) == null) || (length = table.length) == 0) {
         return;
       } else if((node = {{ key }}2ObjectSyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-        if({{ key }}2ObjectSyncMap.replaceNode(table, index, new Node<>(hash, key, reference))) {
+        if({{ key }}2ObjectSyncMap.replaceNode(table, index, new Node(hash, key, reference))) {
           return;
         }
 
         Thread.onSpinWait();
       } else if(node.hash == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-        table = this.forward((ForwardingNode<V>) node);
+        table = this.forward((ForwardingNode) node);
       } else {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(table, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(table, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
                 node.reference(reference);
                 return;
               }
 
-              final Node<V> previousNode = node;
-              if((node = node.next()) == null) {
-                previousNode.next(new Node<>(hash, key, reference));
+              final Node previousNode = node;
+              if((node = node.nextPlain()) == null) {
+                previousNode.next(new Node(hash, key, reference));
                 return;
               }
             }
@@ -1225,8 +1217,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V remove(final {{ keyPrimitive }} key) {
-    Node<V>[] immutable, mutable; int length;
-    Node<V> node;
+    Node[] immutable, mutable; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -1265,10 +1257,10 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       final int index;
       if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
-            for(Node<V> previousNode = null; ; ) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
+            for(Node previousNode = null; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
                   if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) return null;
@@ -1281,9 +1273,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                   }
 
                   if(previousNode != null) {
-                    previousNode.next(node.next());
+                    previousNode.next(node.nextPlain());
                   } else {
-                    {{ key }}2ObjectSyncMap.setNode(mutable, index, node.next());
+                    {{ key }}2ObjectSyncMap.setNode(mutable, index, node.nextPlain());
                   }
 
                   break retry;
@@ -1292,7 +1284,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
               previousNode = node;
 
-              if((node = node.next()) == null) {
+              if((node = node.nextPlain()) == null) {
                 return null;
               }
             }
@@ -1316,8 +1308,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public boolean remove(final {{ keyPrimitive }} key, final Object value) {
     requireNonNull(value, "value");
 
-    Node<V>[] immutable, mutable; int length;
-    Node<V> node;
+    Node[] immutable, mutable; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -1356,10 +1348,10 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       final int index;
       if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
-            for(Node<V> previousNode = null; ; ) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
+            for(Node previousNode = null; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
                   if(previous == null || previous == {{ key }}2ObjectSyncMap.EXPUNGED) return false;
@@ -1373,9 +1365,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                   }
 
                   if(previousNode != null) {
-                    previousNode.next(node.next());
+                    previousNode.next(node.nextPlain());
                   } else {
-                    {{ key }}2ObjectSyncMap.setNode(mutable, index, node.next());
+                    {{ key }}2ObjectSyncMap.setNode(mutable, index, node.nextPlain());
                   }
 
                   break retry;
@@ -1384,7 +1376,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
               previousNode = node;
 
-              if((node = node.next()) == null) {
+              if((node = node.nextPlain()) == null) {
                 return false;
               }
             }
@@ -1409,8 +1401,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V replace(final {{ keyPrimitive }} key, final @NonNull V value) {
     requireNonNull(value, "value");
 
-    Node<V>[] immutable, mutable; int length;
-    Node<V> node;
+    Node[] immutable, mutable; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -1449,10 +1441,10 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       final int index;
       if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
                   if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) return null;
@@ -1468,7 +1460,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                 }
               }
 
-              if((node = node.next()) == null) {
+              if((node = node.nextPlain()) == null) {
                 return null;
               }
             }
@@ -1492,8 +1484,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     requireNonNull(oldValue, "oldValue");
     requireNonNull(newValue, "newValue");
 
-    Node<V>[] immutable, mutable; int length;
-    Node<V> node;
+    Node[] immutable, mutable; int length;
+    Node node;
 
     final int hash = this.mixFunction.mix(key);
 
@@ -1533,10 +1525,10 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       final int index;
       if((node = {{ key }}2ObjectSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if({{ key }}2ObjectSyncMap.getNode(mutable, index) == node) {
+          if({{ key }}2ObjectSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && node.key == key) {
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
                   if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) return false;
@@ -1553,7 +1545,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                 }
               }
 
-              if((node = node.next()) == null) {
+              if((node = node.nextPlain()) == null) {
                 return false;
               }
             }
@@ -1574,13 +1566,13 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     this.promote(true);
 
-    final Node<V>[] table = this.immutableTable;
+    final Node[] table = this.immutableTable;
     if(table.length > 0) {
-      final Traverser<V> traverser = new Traverser<>(table);
+      final Traverser traverser = new Traverser(table);
 
-      Node<V> node;
+      Node node;
       while((node = traverser.advanceNode()) != null) {
-        final Object current = node.reference().get();
+        final Object current = node.referencePlain().get();
         if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) continue;
 
         consumer.accept(node.key, (V) current);
@@ -1592,13 +1584,13 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public void clear() {
     this.promote(true);
 
-    final Node<V>[] table = this.immutableTable;
+    final Node[] table = this.immutableTable;
     if(table.length > 0) {
-      final Traverser<V> traverser = new Traverser<>(table);
+      final Traverser traverser = new Traverser(table);
 
-      Node<V> node; long count = 0L;
+      Node node; long count = 0L;
       while((node = traverser.advanceNode()) != null) {
-        final ObjectReference reference = node.reference();
+        final ObjectReference reference = node.referencePlain();
         Object current = reference.get();
         for(; ; ) {
           if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) continue;
@@ -1635,7 +1627,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    */
   @Override
   public ObjectSet<{{ key }}2ObjectMap.Entry<V>> {{ keyPrimitive }}2ObjectEntrySet() {
-    if(this.entrySet != null) return this.entrySet;
+    final EntrySet entries = this.entrySet;
+    if(entries != null) return entries;
     return this.entrySet = new EntrySet();
   }
 
@@ -1648,9 +1641,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param node the forwarding node
    * @return the next table
    */
-  /* package */ Node<V>@Nullable [] forward(final ForwardingNode<V> node) {
+  /* package */ Node@Nullable [] forward(final ForwardingNode node) {
     if(this.amended) {
-      final Node<V>[] next = node.nextTable;
+      final Node[] next = node.nextTable;
       if(next == this.transferTable) return next;
     }
 
@@ -1688,9 +1681,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    *
    * @return the mutable table
    */
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  /* package */ Node<V>@Nullable [] initialize() {
-    Node<V>[] source, destination;
+  /* package */ Node@Nullable [] initialize() {
+    Node[] source, destination;
 
     long state; int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_INITIALIZE, StampLock.PHASE_RUNNING, 1, 0);
@@ -1734,16 +1726,15 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Creates a new mutable table with an increased capacity from the previous
    * mutable table and transfers the nodes to it.
    */
-  @SuppressWarnings({"rawtypes", "unchecked"})
   /* package */ void resize() {
-    Node<V>[] source, destination; int length;
+    Node[] source, destination; int length;
 
     long state; int operation, phase, count, version, nextVersion;
     for(state = this.stampLock.getVolatile(); ; ) {
       if(!this.amended
         || (source = this.mutableTable) == null
         || (length = source.length) <= 0
-        || (this.size.sum() * this.loadFactor) < length) return;
+        || this.size.sum() < ((long) length * this.loadFactor)) return;
 
       operation = StampLock.operation(state);
       version = StampLock.version(state);
@@ -1764,8 +1755,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
           continue;
         }
 
-        this.capacity = length << 1;
         {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, length);
+
+        this.capacity = length << 1;
         this.transferTable = destination = new Node[this.capacity];
         break;
       } else if(operation == StampLock.OPERATION_RESIZE
@@ -1834,8 +1826,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         }
 
         if(finalize) {
-          {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, 0);
-          {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
+          {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setOpaque(this, 0);
+          {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setOpaque(this, 0);
 
           state = StampLock.withReset(nextVersion + 1);
           this.stampLock.setVolatile(state);
@@ -1850,9 +1842,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Creates a new mutable table from the immutable table, when new nodes are
    * required and transfers the nodes to it.
    */
-  @SuppressWarnings({"rawtypes", "unchecked"})
   /* package */ void amend() {
-    Node<V>[] source, destination; int length;
+    Node[] source, destination; int length;
 
     long state; int operation, phase, count, version, nextVersion;
     for(state = this.stampLock.getVolatile(); ; ) {
@@ -1878,6 +1869,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         }
 
         {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, length);
+
         this.transferTable = destination = new Node[length];
         break;
       } else if(operation == StampLock.OPERATION_AMEND
@@ -1948,8 +1940,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         }
 
         if(finalize) {
-          {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setRelease(this, 0);
-          {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setRelease(this, 0);
+          {{ key }}2ObjectSyncMap.TRANSFER_INDEX.setOpaque(this, 0);
+          {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.setOpaque(this, 0);
 
           state = StampLock.withReset(nextVersion + 1);
           this.stampLock.setVolatile(state);
@@ -1967,7 +1959,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param wait whether to wait until we can promote
    */
   /* package */ void promote(final boolean wait) {
-    Node<V>[] source;
+    Node[] source;
 
     long state; int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_PROMOTE, StampLock.PHASE_RUNNING, 1, 0);
@@ -2021,7 +2013,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @return the transfer progress count
    */
   @SuppressWarnings({"SynchronizationOnLocalVariableOrMethodParameter"})
-  /* package */ int transfer(final Node<V>[] source, final Node<V>[] destination, final boolean resize) {
+  /* package */ int transfer(final Node[] source, final Node[] destination, final boolean resize) {
     final int capacity = source.length, nextCapacity = destination.length;
 
     int stride;
@@ -2029,23 +2021,26 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       stride = {{ key }}2ObjectSyncMap.MINIMUM_TRANSFER_STRIDE;
     }
 
-    final ForwardingNode<V> forwardingNode = new ForwardingNode<>(destination);
+    final ForwardingNode forwardingNode = new ForwardingNode(destination);
     int progress = 0, delta = 0;
     boolean finished = false;
 
     outer: for(; ; ) {
-      Node<V> node;
+      Node node;
       int index, bound = 0;
 
+      index = (int) {{ key }}2ObjectSyncMap.TRANSFER_INDEX.getAcquire(this);
       for(; ; ) {
-        if((index = (int) {{ key }}2ObjectSyncMap.TRANSFER_INDEX.getAcquire(this)) <= 0 || finished) {
+        final int witness;
+        if(index <= 0) {
           index = -1;
           break;
-        } else if({{ key }}2ObjectSyncMap.TRANSFER_INDEX.compareAndSet(this, index, bound = (index > stride ? index - stride : 0))) {
+        } else if((witness = (int) {{ key }}2ObjectSyncMap.TRANSFER_INDEX.compareAndExchangeAcquire(this, index, bound = (index > stride ? index - stride : 0))) == index) {
           delta = index - bound;
           break;
         }
 
+        index = witness;
         Thread.onSpinWait();
       }
 
@@ -2066,15 +2061,15 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
           advance = true;
         } else {
           synchronized(node) {
-            if({{ key }}2ObjectSyncMap.getNode(source, i) == node) {
-              Node<V> loHead = null, loTail = null;
-              Node<V> hiHead = null, hiTail = null;
-              Node<V> next = node;
+            if({{ key }}2ObjectSyncMap.getNodePlain(source, i) == node) {
+              Node loHead = null, loTail = null;
+              Node hiHead = null, hiTail = null;
+              Node next = node;
 
               retry: while((node = next) != null) {
-                next = node.next();
+                next = node.nextPlain();
 
-                final ObjectReference reference = node.reference();
+                final ObjectReference reference = node.referencePlain();
                 if(!resize) {
                   for(; ; ) {
                     final Object current = reference.get();
@@ -2090,7 +2085,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
                   }
                 }
 
-                final {{ key }}2ObjectSyncMap.Node<V> cloned = new {{ key }}2ObjectSyncMap.Node<>(node.hash, node.key, node.reference());
+                final {{ key }}2ObjectSyncMap.Node cloned = new {{ key }}2ObjectSyncMap.Node(node.hash, node.key, reference);
                 if((node.hash & capacity) == 0) {
                   if(loTail == null) {
                     loHead = cloned;
@@ -2137,14 +2132,14 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
         for(; ; ) {
           if(progress >= capacity) break;
 
-          final int current = (int) {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.compareAndExchangeRelease(this, progress, progress + delta);
-          if(current == progress) {
+          final int witness = (int) {{ key }}2ObjectSyncMap.TRANSFER_PROGRESS.compareAndExchangeRelease(this, progress, progress + delta);
+          if(witness == progress) {
             progress += delta;
             delta = 0;
             break;
           }
 
-          progress = current;
+          progress = witness;
           Thread.onSpinWait();
         }
       }
@@ -2266,7 +2261,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     }
 
     /* package */ long compareAndExchange(final long expect, final long update) {
-      return (long) StampLock.STATE.compareAndExchange(this, expect, update);
+      return (long) StampLock.STATE.compareAndExchangeAcquire(this, expect, update);
     }
   }
 
@@ -2332,10 +2327,8 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Represents a key-value pair in this map with the {@link ObjectReference}
    * holding the value. The key and hash would usually be set, except when
    * the node is special, the hash would be negative and the key {@code null}.
-   *
-   * @param <V> the value type
    */
-  /* package */ static class Node<V> {
+  /* package */ static class Node {
     private static final VarHandle REFERENCE;
     private static final VarHandle NEXT;
 
@@ -2353,13 +2346,17 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     /* package */ final int hash;
     /* package */ final {{ keyPrimitive }} key;
     /* package */ @Nullable ObjectReference reference;
-    /* package */ @Nullable Node<V> next;
+    /* package */ @Nullable Node next;
 
     /* package */ Node(final int hash, final {{ keyPrimitive }} key, final @Nullable ObjectReference reference) {
       this.hash = hash;
       this.key = key;
 
-      Node.REFERENCE.setRelease(this, reference);
+      Node.REFERENCE.setOpaque(this, reference);
+    }
+
+    /* package */ ObjectReference referencePlain() {
+      return (ObjectReference) Node.REFERENCE.get(this);
     }
 
     /* package */ ObjectReference reference() {
@@ -2370,17 +2367,20 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       Node.REFERENCE.setRelease(this, reference);
     }
 
-    @SuppressWarnings("unchecked")
-    /* package */ @Nullable Node<V> next() {
-      return (Node<V>) Node.NEXT.getOpaque(this);
+    /* package */ @Nullable Node nextPlain() {
+      return (Node) Node.NEXT.get(this);
     }
 
-    /* package */ void next(final @Nullable Node<V> node) {
+    /* package */ @Nullable Node next() {
+      return (Node) Node.NEXT.getAcquire(this);
+    }
+
+    /* package */ void next(final @Nullable Node node) {
       Node.NEXT.setRelease(this, node);
     }
 
-    /* package */ @Nullable Node<V> find(final int hash, final {{ keyPrimitive }} key) {
-      Node<V> node = this;
+    /* package */ @Nullable Node find(final int hash, final {{ keyPrimitive }} key) {
+      Node node = this;
       do {
         if(node.hash == hash && node.key == key) return node;
       } while((node = node.next()) != null);
@@ -2391,27 +2391,25 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   /**
    * Represents a node that has been transferred to another table.
-   *
-   * @param <V> the value type
    */
-  /* package */ static final class ForwardingNode<V> extends Node<V> {
-    /* package */ transient final Node<V>[] nextTable;
+  /* package */ static final class ForwardingNode extends Node {
+    /* package */ transient final Node[] nextTable;
 
-    /* package */ ForwardingNode(final Node<V>[] nextTable) {
+    /* package */ ForwardingNode(final Node[] nextTable) {
       super({{ key }}2ObjectSyncMap.NODE_MOVED, ({{ keyPrimitive }}) 0, null);
 
       this.nextTable = nextTable;
     }
 
     @Override
-    /* package */ @Nullable Node<V> find(final int hash, final {{ keyPrimitive }} key) {
-      Node<V> node; int length, nodeHash;
+    /* package */ @Nullable Node find(final int hash, final {{ keyPrimitive }} key) {
+      Node node; int length, nodeHash;
 
-      for(Node<V>[] table = this.nextTable; (length = table.length) > 0; ) {
+      for(Node[] table = this.nextTable; (length = table.length) > 0; ) {
         if((node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) == null) {
           return null;
         } else if((nodeHash = node.hash) == {{ key }}2ObjectSyncMap.NODE_MOVED) {
-          table = ((ForwardingNode<V>) node).nextTable;
+          table = ((ForwardingNode) node).nextTable;
         } else {
           if(nodeHash == hash && node.key == key) {
             return node;
@@ -2534,11 +2532,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Represents an entry {@link Iterator} that traverses the nodes in the
    * given table.
    */
-  /* package */ final class EntryIterator extends Traverser<V> implements ObjectIterator<{{ key }}2ObjectMap.Entry<V>> {
+  /* package */ final class EntryIterator extends Traverser implements ObjectIterator<{{ key }}2ObjectMap.Entry<V>> {
     private {{ key }}2ObjectMap.@Nullable Entry<V> next;
     private {{ key }}2ObjectMap.@Nullable Entry<V> current;
 
-    /* package */ EntryIterator(final Node<V>[] table) {
+    /* package */ EntryIterator(final Node[] table) {
       super(table);
 
       this.advanceEntry();
@@ -2570,9 +2568,9 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     private void advanceEntry() {
       this.next = null;
 
-      Node<V> node;
+      Node node;
       while((node = this.advanceNode()) != null) {
-        final Object current = node.reference().get();
+        final Object current = node.referencePlain().get();
         if(current == null || current == {{ key }}2ObjectSyncMap.EXPUNGED) continue;
 
         this.next = new MapEntry(node.key, (V) current);
@@ -2583,24 +2581,22 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   /**
    * Represents a simple node traversal class for a table.
-   *
-   * @param <V> the value
    */
-  /* package */ static class Traverser<V> {
-    private final Node<V>[] table;
+  /* package */ static class Traverser {
+    private final Node[] table;
     private final int length;
-    private @Nullable Node<V> next;
+    private @Nullable Node next;
     private int index;
 
-    /* package */ Traverser(final Node<V>[] table) {
+    /* package */ Traverser(final Node[] table) {
       this.table = table;
       this.length = table.length;
     }
 
-    /* package */ final @Nullable Node<V> advanceNode() {
-      Node<V> node;
+    /* package */ final @Nullable Node advanceNode() {
+      Node node;
       if((node = this.next) != null) {
-        node = node.next();
+        node = node.nextPlain();
       }
 
       for(; ; ) {
