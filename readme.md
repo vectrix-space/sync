@@ -26,7 +26,7 @@ In order to build Sync you simply need to run the `gradle build` command.
 
 ## Contributing
 
-Contributions are welcome and greatly appreciated! If you plan to add a new feature or fix a bug, please open an issue first to discuss.
+Contributions are welcome and greatly appreciated! If you plan to add a new feature, please open an issue first to discuss.
 
 ## License
 
