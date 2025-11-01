@@ -554,6 +554,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return defaultValue;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code mappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V computeIfAbsent(final K key, final Function<? super K, ? extends @Nullable V> mappingFunction) {
@@ -662,6 +673,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return next;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code remappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V computeIfPresent(final K key, final BiFunction<? super K, ? super V, ? extends @Nullable V> remappingFunction) {
@@ -758,6 +780,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return next;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code remappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V compute(final K key, final BiFunction<? super K, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {

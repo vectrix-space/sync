@@ -536,6 +536,17 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return defaultValue;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code mappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V computeIfAbsent(final {{ keyPrimitive }} key, final {{ keyJava }}Function<? extends @Nullable V> mappingFunction) {
@@ -643,6 +654,17 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return next;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code mappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V computeIfAbsent(final {{ keyPrimitive }} key, final {{ key }}2ObjectFunction<? extends @Nullable V> mappingFunction) {
@@ -750,6 +772,17 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return next;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code remappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @Deprecated
   public @Nullable V computeIfPresent(final {{ keyObject }} key, final BiFunction<? super {{ keyObject }}, ? super V, ? extends @Nullable V> remappingFunction) {
@@ -758,6 +791,17 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return super.computeIfPresent(key, remappingFunction);
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code remappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V computeIfPresent(final {{ keyPrimitive }} key, final BiFunction<? super {{ keyObject }}, ? super V, ? extends @Nullable V> remappingFunction) {
@@ -853,6 +897,17 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return next;
   }
 
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Under contention, the {@code remappingFunction} may be invoked more than
+   * once for the same key; only one result will be stored. The function should
+   * therefore be idempotent and free of externally visible side effects, and
+   * it must not attempt to update this map.</p>
+   *
+   * <p>If the function throws, the exception is propagated and the mapping for
+   * the key remains unchanged.</p>
+   */
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V compute(final {{ keyPrimitive }} key, final BiFunction<? super {{ keyObject }}, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {
