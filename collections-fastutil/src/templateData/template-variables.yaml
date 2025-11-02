@@ -5,27 +5,32 @@ variants:
     keyPrimitive: double
     keyObject: Double
     keyJava: Double
+    mix: FAST_MIX
   float:
     key: Float
     group: floats
     keyPrimitive: float
     keyObject: Float
     keyJava: Double
+    mix: FASTEST_MIX
   int:
     key: Int
     group: ints
     keyPrimitive: int
     keyObject: Integer
     keyJava: Int
+    mix: FASTEST_MIX
   short:
     key: Short
     group: shorts
     keyPrimitive: short
     keyObject: Short
     keyJava: Int
+    mix: FASTEST_MIX
   long:
     key: Long
     group: longs
     keyPrimitive: long
     keyObject: Long
     keyJava: Long
+    mix: FAST_MIX

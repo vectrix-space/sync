@@ -19,7 +19,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiFunction;
 import java.util.function.{{ keyJava }}Function;
-import org.jetbrains.annotations.ApiStatus;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
@@ -48,7 +47,6 @@ import static java.util.Objects.requireNonNull;
  * @param <V> the value type
  * @since 1.0.0
  */
-@ApiStatus.Experimental
 public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   @Serial
@@ -274,13 +272,13 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /* ------------------------- < Public Operations > ------------------------- */
 
   /**
-   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#FAST_MIX},
+   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#{{ mix }}},
    * {@link {{ key }}2ObjectSyncMap#DEFAULT_CAPACITY} and {@link {{ key }}2ObjectSyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @since 1.0.0
    */
   public {{ key }}2ObjectSyncMap() {
-    this(Hashing.FAST_MIX);
+    this(Hashing.{{ mix }});
   }
 
   /**
@@ -295,14 +293,14 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   }
 
   /**
-   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#FAST_MIX}, the
+   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#{{ mix }}}, the
    * given initial capacity and {@link {{ key }}2ObjectSyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
   public {{ key }}2ObjectSyncMap(final int initialCapacity) {
-    this(Hashing.FAST_MIX, initialCapacity);
+    this(Hashing.{{ mix }}, initialCapacity);
   }
 
   /**
@@ -318,7 +316,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   }
 
   /**
-   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#FAST_MIX}, the
+   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#{{ mix }}}, the
    * given initial capacity and the given load factor.
    *
    * @param initialCapacity the initial capacity
@@ -326,7 +324,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @since 1.0.0
    */
   public {{ key }}2ObjectSyncMap(final int initialCapacity, final float loadFactor) {
-    this(Hashing.FAST_MIX, initialCapacity, loadFactor);
+    this(Hashing.{{ mix }}, initialCapacity, loadFactor);
   }
 
   /**

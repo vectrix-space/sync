@@ -38,7 +38,6 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.UnknownNullability;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -68,7 +67,6 @@ import static java.util.Objects.requireNonNull;
  * @param <V> the value type
  * @since 1.0.0
  */
-@ApiStatus.Experimental
 public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V> {
 
   /* ---------------------------- < Constants > ---------------------------- */

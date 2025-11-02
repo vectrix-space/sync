@@ -33,7 +33,7 @@ import org.jetbrains.annotations.ApiStatus;
  * @author Vectrix
  * @since 1.0.0
  */
-@ApiStatus.Internal
+@ApiStatus.NonExtendable
 public interface Hashing {
   /**
    * The bitmask applied to ensure hash values are non-negative and fit within
