@@ -71,7 +71,7 @@ public class Int2ObjectSyncMapBenchmark {
       final boolean prepopulate = "prepopulate".equalsIgnoreCase(this.mode);
 
       switch(this.implementation) {
-        case "SyncMap" -> this.map = presized ? new Int2ObjectSyncMap<>(Hashing.FASTEST_MIX, this.size) : new Int2ObjectSyncMap<>(Hashing.FASTEST_MIX);
+        case "SyncMap" -> this.map = presized ? new Int2ObjectSyncMap<>(Int2ObjectSyncMap.FASTEST_SPREAD, this.size) : new Int2ObjectSyncMap<>(Int2ObjectSyncMap.FASTEST_SPREAD);
         case "SynchronizedMap" -> this.map = presized
           ? Int2ObjectMaps.synchronize(new Int2ObjectOpenHashMap<>(this.size))
           : Int2ObjectMaps.synchronize(new Int2ObjectOpenHashMap<>());

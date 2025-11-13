@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiFunction;
 import java.util.function.{{ keyJava }}Function;
@@ -43,58 +44,60 @@ import static java.util.Objects.requireNonNull;
  *
  * <p>Null values or keys are not accepted.</p>
  *
- * @author Vectrix
+ * @author vectrix
  * @param <V> the value type
  * @since 1.0.0
  */
-public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
+public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> implements Hash {
 
   @Serial
   private static final long serialVersionUID = 0L;
 
-  /* ---------------------------- < Constants > ---------------------------- */
+  /* --- < Constants > ----------------------------------------------------- */
 
   /**
    * Represents the maximum capacity for the underlying tables.
    */
-  /* package */ static final int MAXIMUM_CAPACITY = 1 << 30;
-
-  /**
-   * Represents the default initial capacity of the tables.
-   */
-  /* package */ static final int DEFAULT_CAPACITY = 16;
-
-  /**
-   * Represents the default load factor for resizing this map.
-   */
-  /* package */ static final float DEFAULT_LOAD_FACTOR = 0.85F;
+  private static final int MAXIMUM_CAPACITY = 1 << 30;
 
   /**
    * Represents the maximum number of threads that can participate in a
    * transfer operation.
    */
-  /* package */ static final int MAXIMUM_TRANSFER_THREADS = 16;
+  private static final int MAXIMUM_TRANSFER_THREADS = 16;
 
   /**
    * Represents the minimum transfer stride for transferring batches of
    * nodes per thread.
    */
-  /* package */ static final int MINIMUM_TRANSFER_STRIDE = 16;
+  private static final int MINIMUM_TRANSFER_STRIDE = 16;
+
+  /**
+   * The bitmask applied to ensure hash values are non-negative and fit within
+   * the usable range of 32-bit signed integers.
+   */
+  private static final int HASH_BITS = 0x7FFFFFFF;
 
   /**
    * Represents the hash for a node that has been transferred.
    */
-  /* package */ static final int NODE_MOVED = -1;
+  private static final int NODE_MOVED = -1;
 
   /**
    * Represents a sentinel value for an expunged object reference.
    */
-  /* package */ static final Object EXPUNGED = new Object();
+  private static final Object EXPUNGED = new Object();
 
   /**
    * Represents the maximum number of processors for transfer size limits.
    */
-  /* package */ static final int NCPU = Runtime.getRuntime().availableProcessors();
+  private static final int NCPU = Runtime.getRuntime().availableProcessors();
+
+  /**
+   * A random seed used to introduce variability into hash computations,
+   * reducing predictability and the likelihood of collision attacks.
+   */
+  private static final int HASH_SEED = ThreadLocalRandom.current().nextInt();
 
   /* ------------------------------ < Utilities > ------------------------------ */
 
@@ -104,7 +107,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param value the current size
    * @return the new size
    */
-  /* package */ static int tableSizeFor(final int value) {
+  private static int tableSizeFor(final int value) {
     int length = value - 1;
     length |= length >>> 1;
     length |= length >>> 2;
@@ -114,22 +117,22 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return length <= 0 ? 1 : (length >= {{ key }}2ObjectSyncMap.MAXIMUM_CAPACITY ? {{ key }}2ObjectSyncMap.MAXIMUM_CAPACITY : length + 1);
   }
 
-  /* ---------------------------- < Reflection > ---------------------------- */
+  /* --- < Reflection > ---------------------------------------------------- */
 
   /**
    * Provides atomic operations for {@link Node} tables.
    */
-  /* package */ static final VarHandle NODE_ARRAY;
+  private static final VarHandle NODE_ARRAY;
 
   /**
    * Provides atomic operations for {@link {{ key }}2ObjectSyncMap#transferIndex}.
    */
-  /* package */ static final VarHandle TRANSFER_INDEX;
+  private static final VarHandle TRANSFER_INDEX;
 
   /**
    * Provides atomic operations for {@link {{ key }}2ObjectSyncMap#transferProgress}.
    */
-  /* package */ static final VarHandle TRANSFER_PROGRESS;
+  private static final VarHandle TRANSFER_PROGRESS;
 
   static {
     try {
@@ -143,7 +146,39 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     }
   }
 
-  /* ------------------------------- < Table > ------------------------------ */
+  /* --- < Spread > -------------------------------------------------------- */
+
+  /**
+   * A hash spread function optimized for raw speed with minimal transformation.
+   * Provides adequate distribution for small or moderate-sized maps but may
+   * degrade performance with large datasets or many similar keys.
+   */
+  public static final SpreadFunction FASTEST_SPREAD = x -> (x ^ (x >>> 16)) & {{ key }}2ObjectSyncMap.HASH_BITS;
+
+  /**
+   * A hash spread function that balances performance and moderate hash
+   * distribution. Suitable for medium-sized maps, but may still degrade under
+   * high key similarity or very large data sets.
+   */
+  public static final SpreadFunction FAST_SPREAD = x -> {
+    x ^= (x >>> 16);
+    x ^= (x >>> 13);
+    return x & {{ key }}2ObjectSyncMap.HASH_BITS;
+  };
+
+  /**
+   * A hash spread function that emphasizes stronger distribution while
+   * maintaining good performance. Incorporates {@link #HASH_SEED} to randomize
+   * results and reduce vulnerability to hash collision attacks.
+   */
+  public static final SpreadFunction BALANCED_SPREAD = x -> {
+    x ^= {{ key }}2ObjectSyncMap.HASH_SEED;
+    x ^= (x >>> 16);
+    x ^= (x >>> 13);
+    return x & {{ key }}2ObjectSyncMap.HASH_BITS;
+  };
+
+  /* --- < Table > --------------------------------------------------------- */
 
   /**
    * Returns the {@link Node} at the given {@code index}, if present, otherwise
@@ -153,7 +188,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param index the index
    * @return the node, or null
    */
-  /* package */ static @Nullable Node getNodePlain(final Node[] table, final int index) {
+  private static @Nullable Node getNodePlain(final Node[] table, final int index) {
     return (Node) {{ key }}2ObjectSyncMap.NODE_ARRAY.get(table, index);
   }
 
@@ -165,7 +200,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param index the index
    * @return the node, or null
    */
-  /* package */ static @Nullable Node getNode(final Node[] table, final int index) {
+  private static @Nullable Node getNode(final Node[] table, final int index) {
     return (Node) {{ key }}2ObjectSyncMap.NODE_ARRAY.getAcquire(table, index);
   }
 
@@ -178,7 +213,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param nextNode the new node
    * @return true if new node was set, otherwise false
    */
-  /* package */ static boolean replaceNode(final Node[] table, final int index, final @Nullable Node nextNode) {
+  private static boolean replaceNode(final Node[] table, final int index, final @Nullable Node nextNode) {
     return {{ key }}2ObjectSyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node) null, nextNode) == null;
   }
 
@@ -189,27 +224,27 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param index the index
    * @param node the node
    */
-  /* package */ static void setNode(final Node[] table, final int index, final @Nullable Node node) {
+  private static void setNode(final Node[] table, final int index, final @Nullable Node node) {
     {{ key }}2ObjectSyncMap.NODE_ARRAY.setRelease(table, index, node);
   }
 
-  /* ------------------------------ < Fields > ------------------------------ */
+  /* --- < Fields > -------------------------------------------------------- */
 
   /**
-   * Represents the mix function for distributing hashes in the map.
+   * Represents the spread function for distributing hashes in the map.
    */
-  /* package */ final transient Hashing.MixFunction mixFunction;
+  private final transient SpreadFunction spreadFunction;
 
   /**
    * Represents the load factor for resizing the map.
    */
-  /* package */ final transient float loadFactor;
+  private final transient float loadFactor;
 
   /**
    * Represents an immutable hash table that allows fast retrieval and updates
    * without locking.
    */
-  /* package */ transient volatile Node[] immutableTable;
+  private transient volatile Node[] immutableTable;
 
   /**
    * Represents a mutable hash table that allows updates of new nodes with
@@ -269,54 +304,54 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    */
   private transient volatile @Nullable EntrySet entrySet;
 
-  /* ------------------------- < Public Operations > ------------------------- */
+  /* --- < Public Operations > --------------------------------------------- */
 
   /**
-   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#{{ mix }}},
+   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link {{ key }}2ObjectSyncMap#{{ mix }}},
    * {@link {{ key }}2ObjectSyncMap#DEFAULT_CAPACITY} and {@link {{ key }}2ObjectSyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @since 1.0.0
    */
   public {{ key }}2ObjectSyncMap() {
-    this(Hashing.{{ mix }});
+    this({{ key }}2ObjectSyncMap.{{ mix }});
   }
 
   /**
    * Initializes a new {@link {{ key }}2ObjectSyncMap} with the given mix function,
    * {@link {{ key }}2ObjectSyncMap#DEFAULT_CAPACITY} and {@link {{ key }}2ObjectSyncMap#DEFAULT_LOAD_FACTOR}.
    *
-   * @param mixFunction the mix function
+   * @param spreadFunction the spread function
    * @since 1.0.0
    */
-  public {{ key }}2ObjectSyncMap(final Hashing.MixFunction mixFunction) {
-    this(mixFunction, {{ key }}2ObjectSyncMap.DEFAULT_CAPACITY);
+  public {{ key }}2ObjectSyncMap(final SpreadFunction spreadFunction) {
+    this(spreadFunction, {{ key }}2ObjectSyncMap.DEFAULT_CAPACITY);
   }
 
   /**
-   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#{{ mix }}}, the
+   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link {{ key }}2ObjectSyncMap#{{ mix }}}, the
    * given initial capacity and {@link {{ key }}2ObjectSyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
   public {{ key }}2ObjectSyncMap(final int initialCapacity) {
-    this(Hashing.{{ mix }}, initialCapacity);
+    this({{ key }}2ObjectSyncMap.{{ mix }}, initialCapacity);
   }
 
   /**
    * Initializes a new {@link {{ key }}2ObjectSyncMap} with the given mix function, the given
    * initial capacity and {@link {{ key }}2ObjectSyncMap#DEFAULT_LOAD_FACTOR}.
    *
-   * @param mixFunction the mix function
+   * @param spreadFunction the spread function
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
-  public {{ key }}2ObjectSyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity) {
-    this(mixFunction, initialCapacity, {{ key }}2ObjectSyncMap.DEFAULT_LOAD_FACTOR);
+  public {{ key }}2ObjectSyncMap(final SpreadFunction spreadFunction, final int initialCapacity) {
+    this(spreadFunction, initialCapacity, {{ key }}2ObjectSyncMap.DEFAULT_LOAD_FACTOR);
   }
 
   /**
-   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link Hashing#{{ mix }}}, the
+   * Initializes a new {@link {{ key }}2ObjectSyncMap} with {@link {{ key }}2ObjectSyncMap#{{ mix }}}, the
    * given initial capacity and the given load factor.
    *
    * @param initialCapacity the initial capacity
@@ -324,24 +359,24 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @since 1.0.0
    */
   public {{ key }}2ObjectSyncMap(final int initialCapacity, final float loadFactor) {
-    this(Hashing.{{ mix }}, initialCapacity, loadFactor);
+    this({{ key }}2ObjectSyncMap.{{ mix }}, initialCapacity, loadFactor);
   }
 
   /**
    * Initializes a new {@link {{ key }}2ObjectSyncMap} with the given mix function, the given
    * initial capacity and the given load factor.
    *
-   * @param mixFunction the mix function
+   * @param spreadFunction the spread function
    * @param initialCapacity the initial capacity
    * @param loadFactor the load factor
    * @since 1.0.0
    */
-  public {{ key }}2ObjectSyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity, final float loadFactor) {
+  public {{ key }}2ObjectSyncMap(final SpreadFunction spreadFunction, final int initialCapacity, final float loadFactor) {
     final int capacity = initialCapacity >= {{ key }}2ObjectSyncMap.MAXIMUM_CAPACITY
       ? {{ key }}2ObjectSyncMap.MAXIMUM_CAPACITY
       : {{ key }}2ObjectSyncMap.tableSizeFor(initialCapacity);
 
-    this.mixFunction = mixFunction;
+    this.spreadFunction = spreadFunction;
     this.loadFactor = loadFactor;
     this.capacity = capacity;
 
@@ -363,10 +398,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   @Override
   public boolean containsKey(final {{ keyPrimitive }} key) {
-    Node[] table = this.immutableTable; int length = table.length;
+    Node[] table = this.immutableTable;
+    int length = table.length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && node.key == key) {
@@ -423,10 +459,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
   @Override
   public @Nullable V get(final {{ keyPrimitive }} key) {
-    Node[] table = this.immutableTable; int length = table.length;
+    Node[] table = this.immutableTable;
+    int length = table.length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && node.key == key) {
@@ -485,10 +522,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public V getOrDefault(final {{ keyPrimitive }} key, final V defaultValue) {
     requireNonNull(defaultValue, "defaultValue");
 
-    Node[] table = this.immutableTable; int length = table.length;
+    Node[] table = this.immutableTable;
+    int length = table.length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
     if(length > 0 && (node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && node.key == key) {
@@ -550,14 +588,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V computeIfAbsent(final {{ keyPrimitive }} key, final {{ keyJava }}Function<? extends @Nullable V> mappingFunction) {
     requireNonNull(mappingFunction, "mappingFunction");
 
-    Node[] immutable, mutable = null; int length;
+    V next;
+
+    Node[] immutable, mutable = null;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    V next;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
@@ -668,14 +710,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V computeIfAbsent(final {{ keyPrimitive }} key, final {{ key }}2ObjectFunction<? extends @Nullable V> mappingFunction) {
     requireNonNull(mappingFunction, "mappingFunction");
 
-    Node[] immutable, mutable = null; int length;
+    V next;
+
+    Node[] immutable, mutable = null;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    V next;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
@@ -805,14 +851,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V computeIfPresent(final {{ keyPrimitive }} key, final BiFunction<? super {{ keyObject }}, ? super V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(remappingFunction, "remappingFunction");
 
-    Node[] immutable, mutable; int length;
+    V next;
+    long count = 0L;
+
+    Node[] immutable, mutable;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    V next; long count = 0L;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -911,14 +962,19 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V compute(final {{ keyPrimitive }} key, final BiFunction<? super {{ keyObject }}, ? super @Nullable V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(remappingFunction, "remappingFunction");
 
-    Node[] immutable, mutable = null; int length;
+    V next;
+    long count = 0L;
+
+    Node[] immutable, mutable = null;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    V next; long count = 0L;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1038,13 +1094,16 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V putIfAbsent(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable = null; int length;
+    Node[] immutable, mutable = null;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
@@ -1132,13 +1191,16 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V put(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable = null; int length;
+    Node[] immutable, mutable = null;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1223,7 +1285,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return null;
   }
 
-  /* package */ void amendNode(final int hash, final {{ keyPrimitive }} key, final ObjectReference reference) {
+  private void amendNode(final int hash, final {{ keyPrimitive }} key, final ObjectReference reference) {
     Node[] table = this.mutableTable;
 
     for(Node node; ; ) {
@@ -1270,14 +1332,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   @Override
   @SuppressWarnings("unchecked")
   public @Nullable V remove(final {{ keyPrimitive }} key) {
-    Node[] immutable, mutable; int length;
+    Object previous;
+
+    Node[] immutable, mutable;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    Object previous;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1361,13 +1427,16 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public boolean remove(final {{ keyPrimitive }} key, final Object value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable; int length;
+    Node[] immutable, mutable;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1454,14 +1523,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   public @Nullable V replace(final {{ keyPrimitive }} key, final @NonNull V value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable; int length;
+    Object previous;
+
+    Node[] immutable, mutable;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    Object previous;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1537,14 +1610,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     requireNonNull(oldValue, "oldValue");
     requireNonNull(newValue, "newValue");
 
-    Node[] immutable, mutable; int length;
+    Object previous;
+
+    Node[] immutable, mutable;
+    int length;
     Node node;
 
-    final int hash = this.mixFunction.mix(key);
+    final int hash = this.spreadFunction.spread(key);
 
-    Object previous;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1639,9 +1716,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     final Node[] table = this.immutableTable;
     if(table.length > 0) {
+      long count = 0L;
+
       final Traverser traverser = new Traverser(table);
 
-      Node node; long count = 0L;
+      Node node;
       while((node = traverser.advanceNode()) != null) {
         final ObjectReference reference = node.referencePlain();
         Object current = reference.get();
@@ -1685,7 +1764,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     return this.entrySet = new EntrySet();
   }
 
-  /* ------------------------ < Private Operations > ------------------------ */
+  /* --- < Private Operations > -------------------------------------------- */
 
   /**
    * Assists in transferring nodes from the old table to the new table, during
@@ -1694,7 +1773,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @param node the forwarding node
    * @return the next table
    */
-  /* package */ Node@Nullable [] forward(final ForwardingNode node) {
+  private Node@Nullable [] forward(final ForwardingNode node) {
     if(this.amended) {
       final Node[] next = node.nextTable;
       if(next == this.transferTable) return next;
@@ -1709,7 +1788,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    *
    * @param value the value to change the size by
    */
-  /* package */ void addCount(final long value) {
+  private void addCount(final long value) {
     this.size.add(value);
 
     if(value <= 0L) return;
@@ -1721,7 +1800,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * missed attempts exceeds the amount of elements in the map, the mutable
    * table will then be promoted to the immutable table.
    */
-  /* package */ void miss() {
+  private void miss() {
     this.misses.increment();
 
     if(this.misses.sum() < this.size.sum()) return;
@@ -1734,10 +1813,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    *
    * @return the mutable table
    */
-  /* package */ Node@Nullable [] initialize() {
+  private Node@Nullable [] initialize() {
+    long state;
+
     Node[] source, destination;
 
-    long state; int operation, version, nextVersion;
+    int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_INITIALIZE, StampLock.PHASE_RUNNING, 1, 0);
 
     for(state = this.stampLock.getVolatile(); ; ) {
@@ -1779,10 +1860,13 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Creates a new mutable table with an increased capacity from the previous
    * mutable table and transfers the nodes to it.
    */
-  /* package */ void resize() {
-    Node[] source, destination; int length;
+  private void resize() {
+    long state;
 
-    long state; int operation, phase, count, version, nextVersion;
+    Node[] source, destination;
+    int length;
+
+    int operation, version, nextVersion, count, phase;
     for(state = this.stampLock.getVolatile(); ; ) {
       if(!this.amended
         || (source = this.mutableTable) == null
@@ -1895,10 +1979,13 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Creates a new mutable table from the immutable table, when new nodes are
    * required and transfers the nodes to it.
    */
-  /* package */ void amend() {
-    Node[] source, destination; int length;
+  private void amend() {
+    long state;
 
-    long state; int operation, phase, count, version, nextVersion;
+    Node[] source, destination;
+    int length;
+
+    int operation, version, nextVersion, count, phase;
     for(state = this.stampLock.getVolatile(); ; ) {
       if(this.amended || this.mutableTable != null || (length = (source = this.immutableTable).length) == 0) return;
 
@@ -2011,10 +2098,12 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    *
    * @param wait whether to wait until we can promote
    */
-  /* package */ void promote(final boolean wait) {
+  protected void promote(final boolean wait) {
+    long state;
+
     Node[] source;
 
-    long state; int operation, version, nextVersion;
+    int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_PROMOTE, StampLock.PHASE_RUNNING, 1, 0);
 
     for(state = this.stampLock.getVolatile(); ; ) {
@@ -2066,7 +2155,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * @return the transfer progress count
    */
   @SuppressWarnings({"SynchronizationOnLocalVariableOrMethodParameter"})
-  /* package */ int transfer(final Node[] source, final Node[] destination, final boolean resize) {
+  private int transfer(final Node[] source, final Node[] destination, final boolean resize) {
     final int capacity = source.length, nextCapacity = destination.length;
 
     int stride;
@@ -2207,33 +2296,33 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Represents a stamped lock for doing bulk map operations such as promoting,
    * resizing, and amending.
    */
-  /* package */ static final class StampLock {
+  private static final class StampLock {
 
     // Constants
 
-    /* package */ static final int OPERATION_NONE = 0;
+    private static final int OPERATION_NONE = 0;
 
-    /* package */ static final int OPERATION_INITIALIZE = 1;
-    /* package */ static final int OPERATION_RESIZE = 2;
-    /* package */ static final int OPERATION_AMEND = 3;
-    /* package */ static final int OPERATION_PROMOTE = 4;
+    private static final int OPERATION_INITIALIZE = 1;
+    private static final int OPERATION_RESIZE = 2;
+    private static final int OPERATION_AMEND = 3;
+    private static final int OPERATION_PROMOTE = 4;
 
-    /* package */ static final int PHASE_IDLE = 0;
-    /* package */ static final int PHASE_RUNNING = 1;
-    /* package */ static final int PHASE_ACHIEVED = 2;
-    /* package */ static final int PHASE_FINALIZED = 3;
+    private static final int PHASE_IDLE = 0;
+    private static final int PHASE_RUNNING = 1;
+    private static final int PHASE_ACHIEVED = 2;
+    private static final int PHASE_FINALIZED = 3;
 
-    /* package */ static final int OPERATION_SHIFT = 0;
-    /* package */ static final long OPERATION_MASK = 0b111L;
+    private static final int OPERATION_SHIFT = 0;
+    private static final long OPERATION_MASK = 0b111L;
 
-    /* package */ static final int PHASE_SHIFT = 3;
-    /* package */ static final long PHASE_MASK = 0b111L;
+    private static final int PHASE_SHIFT = 3;
+    private static final long PHASE_MASK = 0b111L;
 
-    /* package */ static final int COUNT_SHIFT = 6;
-    /* package */ static final long COUNT_MASK = (1L << 16) - 1;
+    private static final int COUNT_SHIFT = 6;
+    private static final long COUNT_MASK = (1L << 16) - 1;
 
-    /* package */ static final int VERSION_SHIFT = 32;
-    /* package */ static final long VERSION_MASK = (1L << 32) - 1;
+    private static final int VERSION_SHIFT = 32;
+    private static final long VERSION_MASK = (1L << 32) - 1;
 
     // Reflection
 
@@ -2251,48 +2340,43 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     // Packing
 
-    /* package */ static int operation(final long state) {
+    private static int operation(final long state) {
       return (int) ((state >>> StampLock.OPERATION_SHIFT) & StampLock.OPERATION_MASK);
     }
 
-    /* package */ static int phase(final long state) {
+    private static int phase(final long state) {
       return (int) ((state >>> StampLock.PHASE_SHIFT) & StampLock.PHASE_MASK);
     }
 
-    /* package */ static int count(final long state) {
+    private static int count(final long state) {
       return (int) ((state >>> StampLock.COUNT_SHIFT) & StampLock.COUNT_MASK);
     }
 
-    /* package */ static int version(final long state) {
+    private static int version(final long state) {
       return (int) ((state >>> StampLock.VERSION_SHIFT) & StampLock.VERSION_MASK);
     }
 
-    /* package */ static long with(final int operation, final int phase, final int count, final int version) {
+    private static long with(final int operation, final int phase, final int count, final int version) {
       return ((long) operation & StampLock.OPERATION_MASK) << StampLock.OPERATION_SHIFT
         | ((long) phase & StampLock.PHASE_MASK) << StampLock.PHASE_SHIFT
         | ((long) count & StampLock.COUNT_MASK) << StampLock.COUNT_SHIFT
         | ((long) version & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT;
     }
 
-    /* package */ static long withReset(final int version) {
+    private static long withReset(final int version) {
       return StampLock.with(StampLock.OPERATION_NONE, StampLock.PHASE_IDLE, 0, version);
     }
 
-    /* package */ static long withPhase(final long state, final int phase) {
+    private static long withPhase(final long state, final int phase) {
       return (state & ~(StampLock.PHASE_MASK << StampLock.PHASE_SHIFT)) | (((long) phase & StampLock.PHASE_MASK) << StampLock.PHASE_SHIFT);
     }
 
-    /* package */ static long withCount(final long state, final int count) {
+    private static long withCount(final long state, final int count) {
       return (state & ~(StampLock.COUNT_MASK << StampLock.COUNT_SHIFT)) | (((long) count & StampLock.COUNT_MASK) << StampLock.COUNT_SHIFT);
     }
 
-    /* package */ static long withVersion(final long state, final int version) {
+    private static long withVersion(final long state, final int version) {
       return (state & ~(StampLock.VERSION_MASK << StampLock.VERSION_SHIFT)) | (((long) version & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT);
-    }
-
-    /* package */ static long incrementVersion(final long state) {
-      final int next = (StampLock.version(state) + 1) & (int) StampLock.VERSION_MASK;
-      return (state & ~(StampLock.VERSION_MASK << StampLock.VERSION_SHIFT)) | (((long) next & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT);
     }
 
     // Fields
@@ -2302,30 +2386,30 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     // Operations
 
-    /* package */ StampLock() {
+    private StampLock() {
     }
 
-    /* package */ long getVolatile() {
+    private long getVolatile() {
       return (long) StampLock.STATE.getVolatile(this);
     }
 
-    /* package */ void setVolatile(final long update) {
+    private void setVolatile(final long update) {
       StampLock.STATE.setVolatile(this, update);
     }
 
-    /* package */ long compareAndExchange(final long expect, final long update) {
+    private long compareAndExchange(final long expect, final long update) {
       return (long) StampLock.STATE.compareAndExchangeAcquire(this, expect, update);
     }
   }
 
-  /* ------------------------ < Object Reference > ------------------------ */
+  /* --- < Object Reference > ---------------------------------------------- */
 
   /**
    * Represents a value holder for sharing across nodes in the immutable and
    * mutable tables, providing atomic updates for the underlying value.
    */
   @SuppressWarnings({"FieldMayBeFinal", "FieldCanBeLocal"})
-  /* package */ static final class ObjectReference {
+  private static final class ObjectReference {
     private static final VarHandle VALUE;
 
     static {
@@ -2340,48 +2424,48 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
 
     private @Nullable Object value;
 
-    /* package */ ObjectReference(final @Nullable Object value) {
+    private ObjectReference(final @Nullable Object value) {
       this.value = value;
     }
 
-    /* package */ boolean valueExists() {
+    private boolean valueExists() {
       final Object value;
       return (value = ObjectReference.VALUE.getOpaque(this)) != null && value != {{ key }}2ObjectSyncMap.EXPUNGED;
     }
 
     @SuppressWarnings("unchecked")
-      /* package */ <V> @Nullable V value() {
+    private <V> @Nullable V value() {
       final Object value;
       return (value = ObjectReference.VALUE.getAcquire(this)) != {{ key }}2ObjectSyncMap.EXPUNGED ? (V) value : null;
     }
 
     @SuppressWarnings("unchecked")
-      /* package */ <V> V valueOr(final V defaultValue) {
+    private <V> V valueOr(final V defaultValue) {
       final Object value;
       return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != {{ key }}2ObjectSyncMap.EXPUNGED) ? (V) value : defaultValue;
     }
 
-    /* package */ @Nullable Object get() {
+    private @Nullable Object get() {
       return ObjectReference.VALUE.getAcquire(this);
     }
 
-    /* package */ boolean expunge() {
+    private boolean expunge() {
       return ObjectReference.VALUE.compareAndExchangeRelease(this, null, {{ key }}2ObjectSyncMap.EXPUNGED) == null;
     }
 
-    /* package */ @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
+    private @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
       return ObjectReference.VALUE.compareAndExchangeRelease(this, expect, update);
     }
   }
 
-  /* ------------------------------ < Nodes > ------------------------------ */
+  /* --- < Nodes > --------------------------------------------------------- */
 
   /**
    * Represents a key-value pair in this map with the {@link ObjectReference}
    * holding the value. The key and hash would usually be set, except when
    * the node is special, the hash would be negative and the key {@code null}.
    */
-  /* package */ static class Node {
+  protected static class Node {
     private static final VarHandle REFERENCE;
     private static final VarHandle NEXT;
 
@@ -2396,44 +2480,45 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
       }
     }
 
-    /* package */ final int hash;
-    /* package */ final {{ keyPrimitive }} key;
-    /* package */ @Nullable ObjectReference reference;
-    /* package */ @Nullable Node next;
+    private final int hash;
+    private final {{ keyPrimitive }} key;
+    private @Nullable ObjectReference reference;
+    private @Nullable Node next;
 
-    /* package */ Node(final int hash, final {{ keyPrimitive }} key, final @Nullable ObjectReference reference) {
+    private Node(final int hash, final {{ keyPrimitive }} key, final @Nullable ObjectReference reference) {
       this.hash = hash;
       this.key = key;
 
       Node.REFERENCE.setOpaque(this, reference);
     }
 
-    /* package */ ObjectReference referencePlain() {
+    private ObjectReference referencePlain() {
       return (ObjectReference) Node.REFERENCE.get(this);
     }
 
-    /* package */ ObjectReference reference() {
+    private ObjectReference reference() {
       return (ObjectReference) Node.REFERENCE.getAcquire(this);
     }
 
-    /* package */ void reference(final ObjectReference reference) {
+    private void reference(final ObjectReference reference) {
       Node.REFERENCE.setRelease(this, reference);
     }
 
-    /* package */ @Nullable Node nextPlain() {
+    private @Nullable Node nextPlain() {
       return (Node) Node.NEXT.get(this);
     }
 
-    /* package */ @Nullable Node next() {
+    private @Nullable Node next() {
       return (Node) Node.NEXT.getAcquire(this);
     }
 
-    /* package */ void next(final @Nullable Node node) {
+    private void next(final @Nullable Node node) {
       Node.NEXT.setRelease(this, node);
     }
 
-    /* package */ @Nullable Node find(final int hash, final {{ keyPrimitive }} key) {
+    protected @Nullable Node find(final int hash, final {{ keyPrimitive }} key) {
       Node node = this;
+
       do {
         if(node.hash == hash && node.key == key) return node;
       } while((node = node.next()) != null);
@@ -2445,20 +2530,24 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /**
    * Represents a node that has been transferred to another table.
    */
-  /* package */ static final class ForwardingNode extends Node {
-    /* package */ transient final Node[] nextTable;
+  protected static final class ForwardingNode extends Node {
+    private transient final Node[] nextTable;
 
-    /* package */ ForwardingNode(final Node[] nextTable) {
+    private ForwardingNode(final Node[] nextTable) {
       super({{ key }}2ObjectSyncMap.NODE_MOVED, ({{ keyPrimitive }}) 0, null);
 
       this.nextTable = nextTable;
     }
 
     @Override
-    /* package */ @Nullable Node find(final int hash, final {{ keyPrimitive }} key) {
-      Node node; int length, nodeHash;
+    protected @Nullable Node find(final int hash, final {{ keyPrimitive }} key) {
+      Node[] table = this.nextTable;
+      int length;
 
-      for(Node[] table = this.nextTable; (length = table.length) > 0; ) {
+      Node node;
+      int nodeHash;
+
+      while((length = table.length) > 0) {
         if((node = {{ key }}2ObjectSyncMap.getNode(table, (length - 1) & hash)) == null) {
           return null;
         } else if((nodeHash = node.hash) == {{ key }}2ObjectSyncMap.NODE_MOVED) {
@@ -2482,16 +2571,16 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
     }
   }
 
-  /* ---------------------------- < Iteration > ---------------------------- */
+  /* --- < Iteration > ----------------------------------------------------- */
 
   /**
    * Represents a view of a map entry.
    */
-  /* package */ final class MapEntry implements {{ key }}2ObjectMap.Entry<V> {
+  private final class MapEntry implements {{ key }}2ObjectMap.Entry<V> {
     private final {{ keyPrimitive }} key;
     private @Nullable V value;
 
-    /* package */ MapEntry(final {{ keyPrimitive }} key, final @Nullable V value) {
+    private MapEntry(final {{ keyPrimitive }} key, final @Nullable V value) {
       this.key = key;
       this.value = value;
     }
@@ -2535,7 +2624,7 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /**
    * Represents a view of the map entries.
    */
-  /* package */ final class EntrySet extends AbstractObjectSet<{{ key }}2ObjectMap.Entry<V>> {
+  private final class EntrySet extends AbstractObjectSet<{{ key }}2ObjectMap.Entry<V>> {
     @Override
     public int size() {
       return {{ key }}2ObjectSyncMap.this.size();
@@ -2585,11 +2674,11 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
    * Represents an entry {@link Iterator} that traverses the nodes in the
    * given table.
    */
-  /* package */ final class EntryIterator extends Traverser implements ObjectIterator<{{ key }}2ObjectMap.Entry<V>> {
+  private final class EntryIterator extends Traverser implements ObjectIterator<{{ key }}2ObjectMap.Entry<V>> {
     private {{ key }}2ObjectMap.@Nullable Entry<V> next;
     private {{ key }}2ObjectMap.@Nullable Entry<V> current;
 
-    /* package */ EntryIterator(final Node[] table) {
+    private EntryIterator(final Node[] table) {
       super(table);
 
       this.advanceEntry();
@@ -2635,18 +2724,18 @@ public class {{ key }}2ObjectSyncMap<V> extends Abstract{{ key }}2ObjectMap<V> {
   /**
    * Represents a simple node traversal class for a table.
    */
-  /* package */ static class Traverser {
+  private static class Traverser {
     private final Node[] table;
     private final int length;
     private @Nullable Node next;
     private int index;
 
-    /* package */ Traverser(final Node[] table) {
+    private Traverser(final Node[] table) {
       this.table = table;
       this.length = table.length;
     }
 
-    /* package */ final @Nullable Node advanceNode() {
+    protected final @Nullable Node advanceNode() {
       Node node;
       if((node = this.next) != null) {
         node = node.nextPlain();

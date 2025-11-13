@@ -72,7 +72,7 @@ public class SyncMapBenchmark {
       final boolean prepopulate = "prepopulate".equalsIgnoreCase(this.mode);
 
       switch(this.implementation) {
-        case "SyncMap" -> this.map = presized ? new SyncMap<>(Hashing.FASTEST_MIX, this.size) : new SyncMap<>(Hashing.FASTEST_MIX);
+        case "SyncMap" -> this.map = presized ? new SyncMap<>(SyncMap.FASTEST_SPREAD, this.size) : new SyncMap<>(SyncMap.FASTEST_SPREAD);
         case "ConcurrentHashMap" -> this.map = presized ? new ConcurrentHashMap<>(this.size) : new ConcurrentHashMap<>();
         case "SynchronizedMap" -> this.map = presized
           ? Collections.synchronizedMap(new HashMap<>(this.size))

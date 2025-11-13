@@ -34,6 +34,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -62,58 +63,60 @@ import static java.util.Objects.requireNonNull;
  *
  * <p>Null values or keys are not accepted.</p>
  *
- * @author Vectrix
+ * @author vectrix
  * @param <K> the key type
  * @param <V> the value type
  * @since 1.0.0
  */
-public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V> {
+public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V>, Hash {
 
-  /* ---------------------------- < Constants > ---------------------------- */
+  /* --- < Constants > ----------------------------------------------------- */
 
   /**
    * Represents the maximum capacity for the underlying tables.
    */
-  /* package */ static final int MAXIMUM_CAPACITY = 1 << 30;
-
-  /**
-   * Represents the default initial capacity of the tables.
-   */
-  /* package */ static final int DEFAULT_CAPACITY = 16;
-
-  /**
-   * Represents the default load factor for resizing this map.
-   */
-  /* package */ static final float DEFAULT_LOAD_FACTOR = 0.85F;
+  private static final int MAXIMUM_CAPACITY = 1 << 30;
 
   /**
    * Represents the maximum number of threads that can participate in a
    * transfer operation.
    */
-  /* package */ static final int MAXIMUM_TRANSFER_THREADS = 16;
+  private static final int MAXIMUM_TRANSFER_THREADS = 16;
 
   /**
    * Represents the minimum transfer stride for transferring batches of
    * nodes per thread.
    */
-  /* package */ static final int MINIMUM_TRANSFER_STRIDE = 16;
+  private static final int MINIMUM_TRANSFER_STRIDE = 16;
+
+  /**
+   * The bitmask applied to ensure hash values are non-negative and fit within
+   * the usable range of 32-bit signed integers.
+   */
+  private static final int HASH_BITS = 0x7FFFFFFF;
 
   /**
    * Represents the hash for a node that has been transferred.
    */
-  /* package */ static final int NODE_MOVED = -1;
+  private static final int NODE_MOVED = -1;
 
   /**
    * Represents a sentinel value for an expunged object reference.
    */
-  /* package */ static final Object EXPUNGED = new Object();
+  private static final Object EXPUNGED = new Object();
 
   /**
    * Represents the maximum number of processors for transfer size limits.
    */
-  /* package */ static final int NCPU = Runtime.getRuntime().availableProcessors();
+  private static final int NCPU = Runtime.getRuntime().availableProcessors();
 
-  /* ------------------------------ < Utilities > ------------------------------ */
+  /**
+   * A random seed used to introduce variability into hash computations,
+   * reducing predictability and the likelihood of collision attacks.
+   */
+  private static final int HASH_SEED = ThreadLocalRandom.current().nextInt();
+
+  /* --- < Utilities > ----------------------------------------------------- */
 
   /**
    * Returns the optimal table size depending on the given capacity.
@@ -121,7 +124,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param value the current size
    * @return the new size
    */
-  /* package */ static int tableSizeFor(final int value) {
+  private static int tableSizeFor(final int value) {
     int length = value - 1;
     length |= length >>> 1;
     length |= length >>> 2;
@@ -131,22 +134,22 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return length <= 0 ? 1 : (length >= SyncMap.MAXIMUM_CAPACITY ? SyncMap.MAXIMUM_CAPACITY : length + 1);
   }
 
-  /* ---------------------------- < Reflection > ---------------------------- */
+  /* --- < Reflection > ---------------------------------------------------- */
 
   /**
    * Provides atomic operations for {@link Node} tables.
    */
-  /* package */ static final VarHandle NODE_ARRAY;
+  private static final VarHandle NODE_ARRAY;
 
   /**
    * Provides atomic operations for {@link SyncMap#transferIndex}.
    */
-  /* package */ static final VarHandle TRANSFER_INDEX;
+  private static final VarHandle TRANSFER_INDEX;
 
   /**
    * Provides atomic operations for {@link SyncMap#transferProgress}.
    */
-  /* package */ static final VarHandle TRANSFER_PROGRESS;
+  private static final VarHandle TRANSFER_PROGRESS;
 
   static {
     try {
@@ -160,7 +163,39 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
   }
 
-  /* ------------------------------- < Table > ------------------------------ */
+  /* --- < Spread > -------------------------------------------------------- */
+
+  /**
+   * A hash spread function optimized for raw speed with minimal transformation.
+   * Provides adequate distribution for small or moderate-sized maps but may
+   * degrade performance with large datasets or many similar keys.
+   */
+  public static final SpreadFunction FASTEST_SPREAD = x -> (x ^ (x >>> 16)) & SyncMap.HASH_BITS;
+
+  /**
+   * A hash spread function that balances performance and moderate hash
+   * distribution. Suitable for medium-sized maps, but may still degrade under
+   * high key similarity or very large data sets.
+   */
+  public static final SpreadFunction FAST_SPREAD = x -> {
+    x ^= (x >>> 16);
+    x ^= (x >>> 13);
+    return x & SyncMap.HASH_BITS;
+  };
+
+  /**
+   * A hash spread function that emphasizes stronger distribution while
+   * maintaining good performance. Incorporates {@link #HASH_SEED} to randomize
+   * results and reduce vulnerability to hash collision attacks.
+   */
+  public static final SpreadFunction BALANCED_SPREAD = x -> {
+    x ^= SyncMap.HASH_SEED;
+    x ^= (x >>> 16);
+    x ^= (x >>> 13);
+    return x & SyncMap.HASH_BITS;
+  };
+
+  /* --- < Table > --------------------------------------------------------- */
 
   /**
    * Returns the {@link Node} at the given {@code index}, if present, otherwise
@@ -173,7 +208,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the node, or null
    */
   @SuppressWarnings("unchecked")
-  /* package */ static <K, V> @Nullable Node<K, V> getNodePlain(final Node<K, V>[] table, final int index) {
+  private static <K, V> @Nullable Node<K, V> getNodePlain(final Node<K, V>[] table, final int index) {
     return (Node<K, V>) SyncMap.NODE_ARRAY.get(table, index);
   }
 
@@ -188,7 +223,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the node, or null
    */
   @SuppressWarnings("unchecked")
-  /* package */ static <K, V> @Nullable Node<K, V> getNode(final Node<K, V>[] table, final int index) {
+  private static <K, V> @Nullable Node<K, V> getNode(final Node<K, V>[] table, final int index) {
     return (Node<K, V>) SyncMap.NODE_ARRAY.getAcquire(table, index);
   }
 
@@ -203,7 +238,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param nextNode the new node
    * @return true if new node was set, otherwise false
    */
-  /* package */ static <K, V> boolean replaceNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> nextNode) {
+  private static <K, V> boolean replaceNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> nextNode) {
     return SyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node<K, V>) null, nextNode) == null;
   }
 
@@ -216,27 +251,27 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <K> the key type
    * @param <V> the value type
    */
-  /* package */ static <K, V> void setNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> node) {
+  private static <K, V> void setNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> node) {
     SyncMap.NODE_ARRAY.setRelease(table, index, node);
   }
 
-  /* ------------------------------ < Fields > ------------------------------ */
+  /* --- < Fields > -------------------------------------------------------- */
 
   /**
-   * Represents the mix function for distributing hashes in the map.
+   * Represents the spread function for distributing hashes in the map.
    */
-  /* package */ final transient Hashing.MixFunction mixFunction;
+  private final transient SpreadFunction spreadFunction;
 
   /**
    * Represents the load factor for resizing the map.
    */
-  /* package */ final transient float loadFactor;
+  private final transient float loadFactor;
 
   /**
    * Represents an immutable hash table that allows fast retrieval and updates
    * without locking.
    */
-  /* package */ transient volatile Node<K, V>[] immutableTable;
+  private transient volatile Node<K, V>[] immutableTable;
 
   /**
    * Represents a mutable hash table that allows updates of new nodes with
@@ -296,54 +331,54 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   private transient volatile @Nullable EntrySet entrySet;
 
-  /* ------------------------- < Public Operations > ------------------------- */
+  /* --- < Public Operations > --------------------------------------------- */
 
   /**
-   * Initializes a new {@link SyncMap} with {@link Hashing#FAST_MIX},
+   * Initializes a new {@link SyncMap} with {@link SyncMap#FAST_SPREAD},
    * {@link SyncMap#DEFAULT_CAPACITY} and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @since 1.0.0
    */
   public SyncMap() {
-    this(Hashing.FAST_MIX);
+    this(SyncMap.FAST_SPREAD);
   }
 
   /**
    * Initializes a new {@link SyncMap} with the given mix function,
    * {@link SyncMap#DEFAULT_CAPACITY} and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
    *
-   * @param mixFunction the mix function
+   * @param spreadFunction the mix function
    * @since 1.0.0
    */
-  public SyncMap(final Hashing.MixFunction mixFunction) {
-    this(mixFunction, SyncMap.DEFAULT_CAPACITY);
+  public SyncMap(final SpreadFunction spreadFunction) {
+    this(spreadFunction, SyncMap.DEFAULT_CAPACITY);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with {@link Hashing#FAST_MIX}, the
+   * Initializes a new {@link SyncMap} with {@link SyncMap#FAST_SPREAD}, the
    * given initial capacity and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
   public SyncMap(final int initialCapacity) {
-    this(Hashing.FAST_MIX, initialCapacity);
+    this(SyncMap.FAST_SPREAD, initialCapacity);
   }
 
   /**
    * Initializes a new {@link SyncMap} with the given mix function, the given
    * initial capacity and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
    *
-   * @param mixFunction the mix function
+   * @param spreadFunction the mix function
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
-  public SyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity) {
-    this(mixFunction, initialCapacity, SyncMap.DEFAULT_LOAD_FACTOR);
+  public SyncMap(final SpreadFunction spreadFunction, final int initialCapacity) {
+    this(spreadFunction, initialCapacity, SyncMap.DEFAULT_LOAD_FACTOR);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with {@link Hashing#FAST_MIX}, the
+   * Initializes a new {@link SyncMap} with {@link SyncMap#FAST_SPREAD}, the
    * given initial capacity and the given load factor.
    *
    * @param initialCapacity the initial capacity
@@ -351,25 +386,25 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @since 1.0.0
    */
   public SyncMap(final int initialCapacity, final float loadFactor) {
-    this(Hashing.FAST_MIX, initialCapacity, loadFactor);
+    this(SyncMap.FAST_SPREAD, initialCapacity, loadFactor);
   }
 
   /**
    * Initializes a new {@link SyncMap} with the given mix function, the given
    * initial capacity and the given load factor.
    *
-   * @param mixFunction the mix function
+   * @param spreadFunction the mix function
    * @param initialCapacity the initial capacity
    * @param loadFactor the load factor
    * @since 1.0.0
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
-  public SyncMap(final Hashing.MixFunction mixFunction, final int initialCapacity, final float loadFactor) {
+  public SyncMap(final SpreadFunction spreadFunction, final int initialCapacity, final float loadFactor) {
     final int capacity = initialCapacity >= SyncMap.MAXIMUM_CAPACITY
       ? SyncMap.MAXIMUM_CAPACITY
       : SyncMap.tableSizeFor(initialCapacity);
 
-    this.mixFunction = mixFunction;
+    this.spreadFunction = spreadFunction;
     this.loadFactor = loadFactor;
     this.capacity = capacity;
 
@@ -393,10 +428,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   public boolean containsKey(final Object key) {
     requireNonNull(key, "key");
 
-    Node<K, V>[] table = this.immutableTable; int length = table.length;
+    Node<K, V>[] table = this.immutableTable;
+    int length = table.length;
     Node<K, V> node;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    final int hash = this.spreadFunction.spread(key.hashCode());
 
     K nodeKey;
     if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
@@ -447,10 +483,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   public @Nullable V get(final Object key) {
     requireNonNull(key, "key");
 
-    Node<K, V>[] table = this.immutableTable; int length = table.length;
+    Node<K, V>[] table = this.immutableTable;
+    int length = table.length;
     Node<K, V> node;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    final int hash = this.spreadFunction.spread(key.hashCode());
 
     K nodeKey;
     if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
@@ -502,12 +539,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(defaultValue, "defaultValue");
 
-    Node<K, V>[] table = this.immutableTable; int length = table.length;
+    Node<K, V>[] table = this.immutableTable;
+    int length = table.length;
     Node<K, V> node;
+
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
     K nodeKey;
-
-    final int hash = this.mixFunction.mix(key.hashCode());
-
     if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
         return node.referencePlain().valueOr(defaultValue);
@@ -569,14 +607,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(mappingFunction, "mappingFunction");
 
-    Node<K, V>[] immutable, mutable = null; int length;
-    Node<K, V> node; K nodeKey;
-
-    final int hash = this.mixFunction.mix(key.hashCode());
-
     V next;
+
+    Node<K, V>[] immutable, mutable = null;
+    int length;
+    Node<K, V> node;
+
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
@@ -688,14 +731,20 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
-    Node<K, V>[] immutable, mutable; int length;
-    Node<K, V> node; K nodeKey;
+    V next;
+    long count = 0L;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    Node<K, V>[] immutable, mutable;
+    int length;
+    Node<K, V> node;
 
-    V next; long count = 0L;
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -795,14 +844,20 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(remappingFunction, "remappingFunction");
 
-    Node<K, V>[] immutable, mutable = null; int length;
-    Node<K, V> node; K nodeKey;
+    V next;
+    long count = 0L;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    Node<K, V>[] immutable, mutable = null;
+    int length;
+    Node<K, V> node;
 
-    V next; long count = 0L;
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -923,13 +978,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable = null; int length;
-    Node<K, V> node; K nodeKey;
+    Node<K, V>[] immutable, mutable = null;
+    int length;
+    Node<K, V> node;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    final int hash = this.spreadFunction.spread(key.hashCode());
 
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
@@ -1018,13 +1077,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable = null; int length;
-    Node<K, V> node; K nodeKey;
+    Node<K, V>[] immutable, mutable = null;
+    int length;
+    Node<K, V> node;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    final int hash = this.spreadFunction.spread(key.hashCode());
 
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1109,7 +1172,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return null;
   }
 
-  /* package */ void amendNode(final int hash, final K key, final ObjectReference reference) {
+  private void amendNode(final int hash, final K key, final ObjectReference reference) {
     Node<K, V>[] table = this.mutableTable;
 
     for(Node<K, V> node; ; ) {
@@ -1151,14 +1214,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   public @Nullable V remove(final Object key) {
     requireNonNull(key, "key");
 
-    Node<K, V>[] immutable, mutable; int length;
-    Node<K, V> node; K nodeKey;
-
-    final int hash = this.mixFunction.mix(key.hashCode());
-
     Object previous;
+
+    Node<K, V>[] immutable, mutable;
+    int length;
+    Node<K, V> node;
+
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1236,13 +1304,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable; int length;
-    Node<K, V> node; K nodeKey;
+    Node<K, V>[] immutable, mutable;
+    int length;
+    Node<K, V> node;
 
-    final int hash = this.mixFunction.mix(key.hashCode());
+    final int hash = this.spreadFunction.spread(key.hashCode());
 
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1323,14 +1395,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable; int length;
-    Node<K, V> node; K nodeKey;
-
-    final int hash = this.mixFunction.mix(key.hashCode());
-
     Object previous;
+
+    Node<K, V>[] immutable, mutable;
+    int length;
+    Node<K, V> node;
+
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1400,14 +1477,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     requireNonNull(oldValue, "oldValue");
     requireNonNull(newValue, "newValue");
 
-    Node<K, V>[] immutable, mutable; int length;
-    Node<K, V> node; K nodeKey;
-
-    final int hash = this.mixFunction.mix(key.hashCode());
-
     Object previous;
+
+    Node<K, V>[] immutable, mutable;
+    int length;
+    Node<K, V> node;
+
+    final int hash = this.spreadFunction.spread(key.hashCode());
+
+    K nodeKey;
     retry: for(; ; ) {
-      immutable = this.immutableTable; length = immutable.length;
+      immutable = this.immutableTable;
+      length = immutable.length;
+
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
@@ -1502,9 +1584,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     final Node<K, V>[] table = this.immutableTable;
     if(table.length > 0) {
+      long count = 0L;
+
       final Traverser<K, V> traverser = new Traverser<>(table);
 
-      Node<K, V> node; long count = 0L;
+      Node<K, V> node;
       while((node = traverser.advanceNode()) != null) {
         final ObjectReference reference = node.referencePlain();
         Object current = reference.get();
@@ -1548,7 +1632,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return this.entrySet = new EntrySet();
   }
 
-  /* ------------------------ < Private Operations > ------------------------ */
+  /* --- < Private Operations > -------------------------------------------- */
 
   /**
    * Assists in transferring nodes from the old table to the new table, during
@@ -1557,7 +1641,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param node the forwarding node
    * @return the next table
    */
-  /* package */ Node<K, V>@Nullable [] forward(final ForwardingNode<K, V> node) {
+  private Node<K, V>@Nullable [] forward(final ForwardingNode<K, V> node) {
     if(this.amended) {
       final Node<K, V>[] next = node.nextTable;
       if(next == this.transferTable) return next;
@@ -1572,7 +1656,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    *
    * @param value the value to change the size by
    */
-  /* package */ void addCount(final long value) {
+  private void addCount(final long value) {
     this.size.add(value);
 
     if(value <= 0L) return;
@@ -1584,7 +1668,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * missed attempts exceeds the amount of elements in the map, the mutable
    * table will then be promoted to the immutable table.
    */
-  /* package */ void miss() {
+  private void miss() {
     this.misses.increment();
 
     if(this.misses.sum() < this.size.sum()) return;
@@ -1598,10 +1682,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the mutable table
    */
   @SuppressWarnings({"unchecked", "rawtypes"})
-  /* package */ Node<K, V>@Nullable [] initialize() {
+  private Node<K, V>@Nullable [] initialize() {
+    long state;
+
     Node<K, V>[] source, destination;
 
-    long state; int operation, version, nextVersion;
+    int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_INITIALIZE, StampLock.PHASE_RUNNING, 1, 0);
 
     for(state = this.stampLock.getVolatile(); ; ) {
@@ -1644,10 +1730,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * mutable table and transfers the nodes to it.
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
-  /* package */ void resize() {
-    Node<K, V>[] source, destination; int length;
+  private void resize() {
+    long state;
 
-    long state; int operation, phase, count, version, nextVersion;
+    Node<K, V>[] source, destination;
+    int length;
+
+    int operation, version, nextVersion, count, phase;
     for(state = this.stampLock.getVolatile(); ; ) {
       if(!this.amended
         || (source = this.mutableTable) == null
@@ -1761,10 +1850,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * required and transfers the nodes to it.
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
-  /* package */ void amend() {
-    Node<K, V>[] source, destination; int length;
+  private void amend() {
+    long state;
 
-    long state; int operation, phase, count, version, nextVersion;
+    Node<K, V>[] source, destination;
+    int length;
+
+    int operation, version, nextVersion, count, phase;
     for(state = this.stampLock.getVolatile(); ; ) {
       if(this.amended || this.mutableTable != null || (length = (source = this.immutableTable).length) == 0) return;
 
@@ -1876,10 +1968,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    *
    * @param wait whether to wait until we can promote
    */
-  /* package */ void promote(final boolean wait) {
+  protected void promote(final boolean wait) {
+    long state;
+
     Node<K, V>[] source;
 
-    long state; int operation, version, nextVersion;
+    int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_PROMOTE, StampLock.PHASE_RUNNING, 1, 0);
 
     for(state = this.stampLock.getVolatile(); ; ) {
@@ -1931,7 +2025,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return the transfer progress count
    */
   @SuppressWarnings({"SynchronizationOnLocalVariableOrMethodParameter"})
-  /* package */ int transfer(final Node<K, V>[] source, final Node<K, V>[] destination, final boolean resize) {
+  private int transfer(final Node<K, V>[] source, final Node<K, V>[] destination, final boolean resize) {
     final int capacity = source.length, nextCapacity = destination.length;
 
     int stride;
@@ -2066,39 +2160,39 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     return progress;
   }
 
-  /* --------------------------- < Stamp Lock > --------------------------- */
+  /* --- < Stamp Lock > ---------------------------------------------------- */
 
   /**
    * Represents a stamped lock for doing bulk map operations such as promoting,
    * resizing, and amending.
    */
-  /* package */ static final class StampLock {
+  private static final class StampLock {
 
     // Constants
 
-    /* package */ static final int OPERATION_NONE = 0;
+    private static final int OPERATION_NONE = 0;
 
-    /* package */ static final int OPERATION_INITIALIZE = 1;
-    /* package */ static final int OPERATION_RESIZE = 2;
-    /* package */ static final int OPERATION_AMEND = 3;
-    /* package */ static final int OPERATION_PROMOTE = 4;
+    private static final int OPERATION_INITIALIZE = 1;
+    private static final int OPERATION_RESIZE = 2;
+    private static final int OPERATION_AMEND = 3;
+    private static final int OPERATION_PROMOTE = 4;
 
-    /* package */ static final int PHASE_IDLE = 0;
-    /* package */ static final int PHASE_RUNNING = 1;
-    /* package */ static final int PHASE_ACHIEVED = 2;
-    /* package */ static final int PHASE_FINALIZED = 3;
+    private static final int PHASE_IDLE = 0;
+    private static final int PHASE_RUNNING = 1;
+    private static final int PHASE_ACHIEVED = 2;
+    private static final int PHASE_FINALIZED = 3;
 
-    /* package */ static final int OPERATION_SHIFT = 0;
-    /* package */ static final long OPERATION_MASK = 0b111L;
+    private static final int OPERATION_SHIFT = 0;
+    private static final long OPERATION_MASK = 0b111L;
 
-    /* package */ static final int PHASE_SHIFT = 3;
-    /* package */ static final long PHASE_MASK = 0b111L;
+    private static final int PHASE_SHIFT = 3;
+    private static final long PHASE_MASK = 0b111L;
 
-    /* package */ static final int COUNT_SHIFT = 6;
-    /* package */ static final long COUNT_MASK = (1L << 16) - 1;
+    private static final int COUNT_SHIFT = 6;
+    private static final long COUNT_MASK = (1L << 16) - 1;
 
-    /* package */ static final int VERSION_SHIFT = 32;
-    /* package */ static final long VERSION_MASK = (1L << 32) - 1;
+    private static final int VERSION_SHIFT = 32;
+    private static final long VERSION_MASK = (1L << 32) - 1;
 
     // Reflection
 
@@ -2116,48 +2210,43 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     // Packing
 
-    /* package */ static int operation(final long state) {
+    private static int operation(final long state) {
       return (int) ((state >>> StampLock.OPERATION_SHIFT) & StampLock.OPERATION_MASK);
     }
 
-    /* package */ static int phase(final long state) {
+    private static int phase(final long state) {
       return (int) ((state >>> StampLock.PHASE_SHIFT) & StampLock.PHASE_MASK);
     }
 
-    /* package */ static int count(final long state) {
+    private static int count(final long state) {
       return (int) ((state >>> StampLock.COUNT_SHIFT) & StampLock.COUNT_MASK);
     }
 
-    /* package */ static int version(final long state) {
+    private static int version(final long state) {
       return (int) ((state >>> StampLock.VERSION_SHIFT) & StampLock.VERSION_MASK);
     }
 
-    /* package */ static long with(final int operation, final int phase, final int count, final int version) {
+    private static long with(final int operation, final int phase, final int count, final int version) {
       return ((long) operation & StampLock.OPERATION_MASK) << StampLock.OPERATION_SHIFT
         | ((long) phase & StampLock.PHASE_MASK) << StampLock.PHASE_SHIFT
         | ((long) count & StampLock.COUNT_MASK) << StampLock.COUNT_SHIFT
         | ((long) version & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT;
     }
 
-    /* package */ static long withReset(final int version) {
+    private static long withReset(final int version) {
       return StampLock.with(StampLock.OPERATION_NONE, StampLock.PHASE_IDLE, 0, version);
     }
 
-    /* package */ static long withPhase(final long state, final int phase) {
+    private static long withPhase(final long state, final int phase) {
       return (state & ~(StampLock.PHASE_MASK << StampLock.PHASE_SHIFT)) | (((long) phase & StampLock.PHASE_MASK) << StampLock.PHASE_SHIFT);
     }
 
-    /* package */ static long withCount(final long state, final int count) {
+    private static long withCount(final long state, final int count) {
       return (state & ~(StampLock.COUNT_MASK << StampLock.COUNT_SHIFT)) | (((long) count & StampLock.COUNT_MASK) << StampLock.COUNT_SHIFT);
     }
 
-    /* package */ static long withVersion(final long state, final int version) {
+    private static long withVersion(final long state, final int version) {
       return (state & ~(StampLock.VERSION_MASK << StampLock.VERSION_SHIFT)) | (((long) version & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT);
-    }
-
-    /* package */ static long incrementVersion(final long state) {
-      final int next = (StampLock.version(state) + 1) & (int) StampLock.VERSION_MASK;
-      return (state & ~(StampLock.VERSION_MASK << StampLock.VERSION_SHIFT)) | (((long) next & StampLock.VERSION_MASK) << StampLock.VERSION_SHIFT);
     }
 
     // Fields
@@ -2167,30 +2256,30 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     // Operations
 
-    /* package */ StampLock() {
+    private StampLock() {
     }
 
-    /* package */ long getVolatile() {
+    private long getVolatile() {
       return (long) StampLock.STATE.getVolatile(this);
     }
 
-    /* package */ void setVolatile(final long update) {
+    private void setVolatile(final long update) {
       StampLock.STATE.setVolatile(this, update);
     }
 
-    /* package */ long compareAndExchange(final long expect, final long update) {
+    private long compareAndExchange(final long expect, final long update) {
       return (long) StampLock.STATE.compareAndExchangeAcquire(this, expect, update);
     }
   }
 
-  /* ------------------------ < Object Reference > ------------------------ */
+  /* --- < Object Reference > ---------------------------------------------- */
 
   /**
    * Represents a value holder for sharing across nodes in the immutable and
    * mutable tables, providing atomic updates for the underlying value.
    */
   @SuppressWarnings({"FieldMayBeFinal", "FieldCanBeLocal"})
-  /* package */ static final class ObjectReference {
+  private static final class ObjectReference {
     private static final VarHandle VALUE;
 
     static {
@@ -2205,41 +2294,41 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     private @Nullable Object value;
 
-    /* package */ ObjectReference(final @Nullable Object value) {
+    private ObjectReference(final @Nullable Object value) {
       this.value = value;
     }
 
-    /* package */ boolean valueExists() {
+    private boolean valueExists() {
       final Object value;
       return (value = ObjectReference.VALUE.getOpaque(this)) != null && value != SyncMap.EXPUNGED;
     }
 
     @SuppressWarnings("unchecked")
-    /* package */ <V> @Nullable V value() {
+    private <V> @Nullable V value() {
       final Object value;
       return (value = ObjectReference.VALUE.getAcquire(this)) != SyncMap.EXPUNGED ? (V) value : null;
     }
 
     @SuppressWarnings("unchecked")
-    /* package */ <V> V valueOr(final V defaultValue) {
+    private <V> V valueOr(final V defaultValue) {
       final Object value;
       return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != SyncMap.EXPUNGED) ? (V) value : defaultValue;
     }
 
-    /* package */ @Nullable Object get() {
+    private @Nullable Object get() {
       return ObjectReference.VALUE.getAcquire(this);
     }
 
-    /* package */ boolean expunge() {
+    private boolean expunge() {
       return ObjectReference.VALUE.compareAndExchangeRelease(this, null, SyncMap.EXPUNGED) == null;
     }
 
-    /* package */ @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
+    private @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
       return ObjectReference.VALUE.compareAndExchangeRelease(this, expect, update);
     }
   }
 
-  /* ------------------------------ < Nodes > ------------------------------ */
+  /* --- < Nodes > --------------------------------------------------------- */
 
   /**
    * Represents a key-value pair in this map with the {@link ObjectReference}
@@ -2249,7 +2338,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <K> the key type
    * @param <V> the value type
    */
-  /* package */ static class Node<K, V> {
+  protected static class Node<K, V> {
     private static final VarHandle REFERENCE;
     private static final VarHandle NEXT;
 
@@ -2264,46 +2353,48 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
     }
 
-    /* package */ final int hash;
-    /* package */ final K key;
-    /* package */ @Nullable ObjectReference reference;
-    /* package */ @Nullable Node<K, V> next;
+    private final int hash;
+    private final K key;
+    private @Nullable ObjectReference reference;
+    private @Nullable Node<K, V> next;
 
-    /* package */ Node(final int hash, final @UnknownNullability K key, final @Nullable ObjectReference reference) {
+    private Node(final int hash, final @UnknownNullability K key, final @Nullable ObjectReference reference) {
       this.hash = hash;
       this.key = key;
 
       Node.REFERENCE.setOpaque(this, reference);
     }
 
-    /* package */ ObjectReference referencePlain() {
+    private ObjectReference referencePlain() {
       return (ObjectReference) Node.REFERENCE.get(this);
     }
 
-    /* package */ ObjectReference reference() {
+    private ObjectReference reference() {
       return (ObjectReference) Node.REFERENCE.getAcquire(this);
     }
 
-    /* package */ void reference(final ObjectReference reference) {
+    private void reference(final ObjectReference reference) {
       Node.REFERENCE.setRelease(this, reference);
     }
 
     @SuppressWarnings("unchecked")
-    /* package */ @Nullable Node<K, V> nextPlain() {
+    private @Nullable Node<K, V> nextPlain() {
       return (Node<K, V>) Node.NEXT.get(this);
     }
 
     @SuppressWarnings("unchecked")
-    /* package */ @Nullable Node<K, V> next() {
+    private @Nullable Node<K, V> next() {
       return (Node<K, V>) Node.NEXT.getAcquire(this);
     }
 
-    /* package */ void next(final @Nullable Node<K, V> node) {
+    private void next(final @Nullable Node<K, V> node) {
       Node.NEXT.setRelease(this, node);
     }
 
-    /* package */ @Nullable Node<K, V> find(final int hash, final Object key) {
-      Node<K, V> node = this; K nodeKey;
+    protected @Nullable Node<K, V> find(final int hash, final Object key) {
+      Node<K, V> node = this;
+      K nodeKey;
+
       do {
         if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) return node;
       } while((node = node.next()) != null);
@@ -2318,20 +2409,25 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <K> the key type
    * @param <V> the value type
    */
-  /* package */ static final class ForwardingNode<K, V> extends Node<K, V> {
-    /* package */ transient final Node<K, V>[] nextTable;
+  protected static final class ForwardingNode<K, V> extends Node<K, V> {
+    private transient final Node<K, V>[] nextTable;
 
-    /* package */ ForwardingNode(final Node<K, V>[] nextTable) {
+    private ForwardingNode(final Node<K, V>[] nextTable) {
       super(SyncMap.NODE_MOVED, null, null);
 
       this.nextTable = nextTable;
     }
 
     @Override
-    /* package */ @Nullable Node<K, V> find(final int hash, final Object key) {
-      Node<K, V> node; int length, nodeHash; K nodeKey;
+    protected @Nullable Node<K, V> find(final int hash, final Object key) {
+      Node<K, V>[] table = this.nextTable;
+      int length;
 
-      for(Node<K, V>[] table = this.nextTable; (length = table.length) > 0; ) {
+      Node<K, V> node;
+      int nodeHash;
+      K nodeKey;
+
+      while((length = table.length) > 0) {
         if((node = SyncMap.getNode(table, (length - 1) & hash)) == null) {
           return null;
         } else if((nodeHash = node.hash) == SyncMap.NODE_MOVED) {
@@ -2355,16 +2451,16 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
   }
 
-  /* ---------------------------- < Iteration > ---------------------------- */
+  /* --- < Iteration > ----------------------------------------------------- */
 
   /**
    * Represents a view of a map entry.
    */
-  /* package */ final class MapEntry implements Map.Entry<K, V> {
+  private final class MapEntry implements Map.Entry<K, V> {
     private final K key;
     private @Nullable V value;
 
-    /* package */ MapEntry(final K key, final @Nullable V value) {
+    private MapEntry(final K key, final @Nullable V value) {
       this.key = key;
       this.value = value;
     }
@@ -2408,7 +2504,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /**
    * Represents a view of the map entries.
    */
-  /* package */ final class EntrySet extends AbstractSet<Map.Entry<K, V>> {
+  private final class EntrySet extends AbstractSet<Map.Entry<K, V>> {
     @Override
     public int size() {
       return SyncMap.this.size();
@@ -2443,11 +2539,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Represents an entry {@link Iterator} that traverses the nodes in the
    * given table.
    */
-  /* package */ final class EntryIterator extends Traverser<K, V> implements Iterator<Map.Entry<K, V>> {
+  private final class EntryIterator extends Traverser<K, V> implements Iterator<Map.Entry<K, V>> {
     private Map.@Nullable Entry<K, V> next;
     private Map.@Nullable Entry<K, V> current;
 
-    /* package */ EntryIterator(final Node<K, V>[] table) {
+    private EntryIterator(final Node<K, V>[] table) {
       super(table);
 
       this.advanceEntry();
@@ -2496,18 +2592,18 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <K> the key
    * @param <V> the value
    */
-  /* package */ static class Traverser<K, V> {
+  private static class Traverser<K, V> {
     private final Node<K, V>[] table;
     private final int length;
     private @Nullable Node<K, V> next;
     private int index;
 
-    /* package */ Traverser(final Node<K, V>[] table) {
+    private Traverser(final Node<K, V>[] table) {
       this.table = table;
       this.length = table.length;
     }
 
-    /* package */ final @Nullable Node<K, V> advanceNode() {
+    protected @Nullable Node<K, V> advanceNode() {
       Node<K, V> node;
       if((node = this.next) != null) {
         node = node.nextPlain();
