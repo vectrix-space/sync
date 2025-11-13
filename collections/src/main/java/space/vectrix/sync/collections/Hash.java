@@ -23,35 +23,44 @@
  */
 package space.vectrix.sync.collections;
 
-import java.util.Map;
-
 /**
- * Provides {@link SyncMap} specific test data for {@link AbstractMapTest}.
+ * Provides common constants for hashing operations used across
+ * the collections.
  *
+ * @author vectrix
  * @since 1.0.0
  */
-public class SyncMapTest extends AbstractMapTest<String, String> {
-  @Override
-  protected Map<String, String> createMap() {
-    return new SyncMap<>();
-  }
+public interface Hash {
+  /**
+   * Represents the default initial capacity of the tables.
+   *
+   * @since 1.0.0
+   */
+  int DEFAULT_CAPACITY = 16;
 
-  @Override
-  protected Map<String, String> populate(final Map<String, String> map, final int elements) {
-    for(int i = 0; i < elements; i++) {
-      map.put(this.key(i), this.value(i));
-    }
+  /**
+   * Represents the default load factor for resizing this map.
+   *
+   * @since 1.0.0
+   */
+  float DEFAULT_LOAD_FACTOR = 0.75F;
 
-    return map;
-  }
-
-  @Override
-  protected String key(final int index) {
-    return String.valueOf(index);
-  }
-
-  @Override
-  protected String value(final int index) {
-    return String.valueOf(index);
+  /**
+   * Represents a hash spread function to distribute key-value pairs into
+   * buckets using an {@code int} hash.
+   *
+   * @author vectrix
+   * @since 1.0.0
+   */
+  @FunctionalInterface
+  interface SpreadFunction {
+    /**
+     * Spreads the provided hash for distributing key-value pairs into buckets.
+     *
+     * @param hash the hash
+     * @return the spread hash
+     * @since 1.0.0
+     */
+    int spread(final int hash);
   }
 }

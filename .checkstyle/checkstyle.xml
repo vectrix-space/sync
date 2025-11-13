@@ -188,7 +188,7 @@
     </module>
 
     <!-- https://checkstyle.org/config_coding.html#OneStatementPerLine -->
-    <!-- <module name="OneStatementPerLine"/> -->
+    <module name="OneStatementPerLine"/>
 
     <!-- https://checkstyle.org/config_misc.html#OuterTypeFilename -->
     <module name="OuterTypeFilename"/>
