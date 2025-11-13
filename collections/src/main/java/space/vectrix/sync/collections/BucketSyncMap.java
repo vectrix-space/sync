@@ -68,7 +68,7 @@ import static java.util.Objects.requireNonNull;
  * @param <V> the value type
  * @since 1.0.0
  */
-public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V>, Hash {
+public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V>, Hash {
 
   /* --- < Constants > ----------------------------------------------------- */
 
@@ -131,7 +131,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     length |= length >>> 4;
     length |= length >>> 8;
     length |= length >>> 16;
-    return length <= 0 ? 1 : (length >= SyncMap.MAXIMUM_CAPACITY ? SyncMap.MAXIMUM_CAPACITY : length + 1);
+    return length <= 0 ? 1 : (length >= BucketSyncMap.MAXIMUM_CAPACITY ? BucketSyncMap.MAXIMUM_CAPACITY : length + 1);
   }
 
   /* --- < Reflection > ---------------------------------------------------- */
@@ -142,12 +142,12 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   private static final VarHandle NODE_ARRAY;
 
   /**
-   * Provides atomic operations for {@link SyncMap#transferIndex}.
+   * Provides atomic operations for {@link BucketSyncMap#transferIndex}.
    */
   private static final VarHandle TRANSFER_INDEX;
 
   /**
-   * Provides atomic operations for {@link SyncMap#transferProgress}.
+   * Provides atomic operations for {@link BucketSyncMap#transferProgress}.
    */
   private static final VarHandle TRANSFER_PROGRESS;
 
@@ -156,8 +156,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       final MethodHandles.Lookup lookup = MethodHandles.lookup();
 
       NODE_ARRAY = MethodHandles.arrayElementVarHandle(Node[].class);
-      TRANSFER_INDEX = lookup.findVarHandle(SyncMap.class, "transferIndex", int.class);
-      TRANSFER_PROGRESS = lookup.findVarHandle(SyncMap.class, "transferProgress", int.class);
+      TRANSFER_INDEX = lookup.findVarHandle(BucketSyncMap.class, "transferIndex", int.class);
+      TRANSFER_PROGRESS = lookup.findVarHandle(BucketSyncMap.class, "transferProgress", int.class);
     } catch(final Exception exception) {
       throw new ExceptionInInitializerError(exception);
     }
@@ -170,7 +170,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * Provides adequate distribution for small or moderate-sized maps but may
    * degrade performance with large datasets or many similar keys.
    */
-  public static final SpreadFunction FASTEST_SPREAD = x -> (x ^ (x >>> 16)) & SyncMap.HASH_BITS;
+  public static final SpreadFunction FASTEST_SPREAD = x -> (x ^ (x >>> 16)) & BucketSyncMap.HASH_BITS;
 
   /**
    * A hash spread function that balances performance and moderate hash
@@ -180,7 +180,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   public static final SpreadFunction FAST_SPREAD = x -> {
     x ^= (x >>> 16);
     x ^= (x >>> 13);
-    return x & SyncMap.HASH_BITS;
+    return x & BucketSyncMap.HASH_BITS;
   };
 
   /**
@@ -189,10 +189,10 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * results and reduce vulnerability to hash collision attacks.
    */
   public static final SpreadFunction BALANCED_SPREAD = x -> {
-    x ^= SyncMap.HASH_SEED;
+    x ^= BucketSyncMap.HASH_SEED;
     x ^= (x >>> 16);
     x ^= (x >>> 13);
-    return x & SyncMap.HASH_BITS;
+    return x & BucketSyncMap.HASH_BITS;
   };
 
   /* --- < Table > --------------------------------------------------------- */
@@ -209,7 +209,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   @SuppressWarnings("unchecked")
   private static <K, V> @Nullable Node<K, V> getNodePlain(final Node<K, V>[] table, final int index) {
-    return (Node<K, V>) SyncMap.NODE_ARRAY.get(table, index);
+    return (Node<K, V>) BucketSyncMap.NODE_ARRAY.get(table, index);
   }
 
   /**
@@ -224,7 +224,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    */
   @SuppressWarnings("unchecked")
   private static <K, V> @Nullable Node<K, V> getNode(final Node<K, V>[] table, final int index) {
-    return (Node<K, V>) SyncMap.NODE_ARRAY.getAcquire(table, index);
+    return (Node<K, V>) BucketSyncMap.NODE_ARRAY.getAcquire(table, index);
   }
 
   /**
@@ -239,7 +239,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @return true if new node was set, otherwise false
    */
   private static <K, V> boolean replaceNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> nextNode) {
-    return SyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node<K, V>) null, nextNode) == null;
+    return BucketSyncMap.NODE_ARRAY.compareAndExchangeRelease(table, index, (Node<K, V>) null, nextNode) == null;
   }
 
   /**
@@ -252,7 +252,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
    * @param <V> the value type
    */
   private static <K, V> void setNode(final Node<K, V>[] table, final int index, final @Nullable Node<K, V> node) {
-    SyncMap.NODE_ARRAY.setRelease(table, index, node);
+    BucketSyncMap.NODE_ARRAY.setRelease(table, index, node);
   }
 
   /* --- < Fields > -------------------------------------------------------- */
@@ -334,75 +334,75 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   /* --- < Public Operations > --------------------------------------------- */
 
   /**
-   * Initializes a new {@link SyncMap} with {@link SyncMap#FAST_SPREAD},
-   * {@link SyncMap#DEFAULT_CAPACITY} and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   * Initializes a new {@link BucketSyncMap} with {@link BucketSyncMap#FAST_SPREAD},
+   * {@link BucketSyncMap#DEFAULT_CAPACITY} and {@link BucketSyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @since 1.0.0
    */
-  public SyncMap() {
-    this(SyncMap.FAST_SPREAD);
+  public BucketSyncMap() {
+    this(BucketSyncMap.FAST_SPREAD);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with the given mix function,
-   * {@link SyncMap#DEFAULT_CAPACITY} and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   * Initializes a new {@link BucketSyncMap} with the given spread function,
+   * {@link BucketSyncMap#DEFAULT_CAPACITY} and {@link BucketSyncMap#DEFAULT_LOAD_FACTOR}.
    *
-   * @param spreadFunction the mix function
+   * @param spreadFunction the spread function
    * @since 1.0.0
    */
-  public SyncMap(final SpreadFunction spreadFunction) {
-    this(spreadFunction, SyncMap.DEFAULT_CAPACITY);
+  public BucketSyncMap(final SpreadFunction spreadFunction) {
+    this(spreadFunction, BucketSyncMap.DEFAULT_CAPACITY);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with {@link SyncMap#FAST_SPREAD}, the
-   * given initial capacity and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   * Initializes a new {@link BucketSyncMap} with {@link BucketSyncMap#FAST_SPREAD}, the
+   * given initial capacity and {@link BucketSyncMap#DEFAULT_LOAD_FACTOR}.
    *
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
-  public SyncMap(final int initialCapacity) {
-    this(SyncMap.FAST_SPREAD, initialCapacity);
+  public BucketSyncMap(final int initialCapacity) {
+    this(BucketSyncMap.FAST_SPREAD, initialCapacity);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with the given mix function, the given
-   * initial capacity and {@link SyncMap#DEFAULT_LOAD_FACTOR}.
+   * Initializes a new {@link BucketSyncMap} with the given spread function, the given
+   * initial capacity and {@link BucketSyncMap#DEFAULT_LOAD_FACTOR}.
    *
-   * @param spreadFunction the mix function
+   * @param spreadFunction the spread function
    * @param initialCapacity the initial capacity
    * @since 1.0.0
    */
-  public SyncMap(final SpreadFunction spreadFunction, final int initialCapacity) {
-    this(spreadFunction, initialCapacity, SyncMap.DEFAULT_LOAD_FACTOR);
+  public BucketSyncMap(final SpreadFunction spreadFunction, final int initialCapacity) {
+    this(spreadFunction, initialCapacity, BucketSyncMap.DEFAULT_LOAD_FACTOR);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with {@link SyncMap#FAST_SPREAD}, the
+   * Initializes a new {@link BucketSyncMap} with {@link BucketSyncMap#FAST_SPREAD}, the
    * given initial capacity and the given load factor.
    *
    * @param initialCapacity the initial capacity
    * @param loadFactor the load factor
    * @since 1.0.0
    */
-  public SyncMap(final int initialCapacity, final float loadFactor) {
-    this(SyncMap.FAST_SPREAD, initialCapacity, loadFactor);
+  public BucketSyncMap(final int initialCapacity, final float loadFactor) {
+    this(BucketSyncMap.FAST_SPREAD, initialCapacity, loadFactor);
   }
 
   /**
-   * Initializes a new {@link SyncMap} with the given mix function, the given
+   * Initializes a new {@link BucketSyncMap} with the given spread function, the given
    * initial capacity and the given load factor.
    *
-   * @param spreadFunction the mix function
+   * @param spreadFunction the spread function
    * @param initialCapacity the initial capacity
    * @param loadFactor the load factor
    * @since 1.0.0
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
-  public SyncMap(final SpreadFunction spreadFunction, final int initialCapacity, final float loadFactor) {
-    final int capacity = initialCapacity >= SyncMap.MAXIMUM_CAPACITY
-      ? SyncMap.MAXIMUM_CAPACITY
-      : SyncMap.tableSizeFor(initialCapacity);
+  public BucketSyncMap(final SpreadFunction spreadFunction, final int initialCapacity, final float loadFactor) {
+    final int capacity = initialCapacity >= BucketSyncMap.MAXIMUM_CAPACITY
+      ? BucketSyncMap.MAXIMUM_CAPACITY
+      : BucketSyncMap.tableSizeFor(initialCapacity);
 
     this.spreadFunction = spreadFunction;
     this.loadFactor = loadFactor;
@@ -435,7 +435,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = this.spreadFunction.spread(key.hashCode());
 
     K nodeKey;
-    if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+    if(length > 0 && (node = BucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
         return node.referencePlain().valueExists();
       }
@@ -449,7 +449,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       boolean exists = false;
-      retry: if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+      retry: if((node = BucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
         final int nodeHash;
         if((nodeHash = node.hash) == hash) {
           if((nodeKey = node.key) == key || nodeKey.equals(key)) {
@@ -490,7 +490,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = this.spreadFunction.spread(key.hashCode());
 
     K nodeKey;
-    if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+    if(length > 0 && (node = BucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
         return node.referencePlain().value();
       }
@@ -504,7 +504,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       V value = null;
-      retry: if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+      retry: if((node = BucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
         final int nodeHash;
         if((nodeHash = node.hash) == hash) {
           if((nodeKey = node.key) == key || nodeKey.equals(key)) {
@@ -546,7 +546,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int hash = this.spreadFunction.spread(key.hashCode());
 
     K nodeKey;
-    if(length > 0 && (node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+    if(length > 0 && (node = BucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
       if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
         return node.referencePlain().valueOr(defaultValue);
       }
@@ -560,7 +560,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       V value = defaultValue;
-      retry: if((node = SyncMap.getNode(table, (length - 1) & hash)) != null) {
+      retry: if((node = BucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
         final int nodeHash;
         if((nodeHash = node.hash) == hash) {
           if((nodeKey = node.key) == key || nodeKey.equals(key)) {
@@ -623,7 +623,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -633,7 +633,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object previous = reference.get();
           for(; ; ) {
-            if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
+            if(previous != null && previous != BucketSyncMap.EXPUNGED) return (V) previous;
 
             next = mappingFunction.apply(key);
             if(next == null) return null;
@@ -645,7 +645,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               continue;
             }
 
-            if(witness == SyncMap.EXPUNGED) {
+            if(witness == BucketSyncMap.EXPUNGED) {
               this.amendNode(hash, key, reference);
             }
 
@@ -661,26 +661,26 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         Thread.onSpinWait();
-      } else if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+      } else if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
         next = mappingFunction.apply(key);
         if(next == null) return null;
 
-        if(SyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+        if(BucketSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
           break;
         }
 
         Thread.onSpinWait();
-      } else if(node.hash == SyncMap.NODE_MOVED) {
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
         mutable = this.forward((ForwardingNode<K, V>) node);
       } else {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
-                  if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
+                  if(previous != null && previous != BucketSyncMap.EXPUNGED) return (V) previous;
 
                   next = mappingFunction.apply(key);
                   if(next == null) return null;
@@ -748,7 +748,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -758,7 +758,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object previous = reference.get();
           for(; ; ) {
-            if(previous == null || previous == SyncMap.EXPUNGED) return null;
+            if(previous == null || previous == BucketSyncMap.EXPUNGED) return null;
             next = remappingFunction.apply(key, (V) previous);
 
             final Object witness = reference.compareAndExchange(previous, next);
@@ -780,15 +780,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutable = this.mutableTable) == null) return null;
 
       final int index;
-      if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
-                  if(previous == null || previous == SyncMap.EXPUNGED) return null;
+                  if(previous == null || previous == BucketSyncMap.EXPUNGED) return null;
                   next = remappingFunction.apply(key, (V) previous);
 
                   final Object witness = reference.compareAndExchange(previous, next);
@@ -802,7 +802,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     if(previousNode != null) {
                       previousNode.next(node.nextPlain());
                     } else {
-                      SyncMap.setNode(mutable, index, node.nextPlain());
+                      BucketSyncMap.setNode(mutable, index, node.nextPlain());
                     }
 
                     count = -1L;
@@ -861,7 +861,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -871,8 +871,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object previous = reference.get();
           for(; ; ) {
-            next = remappingFunction.apply(key, previous == SyncMap.EXPUNGED ? null : (V) previous);
-            if(next == null && (previous == null || previous == SyncMap.EXPUNGED)) return null;
+            next = remappingFunction.apply(key, previous == BucketSyncMap.EXPUNGED ? null : (V) previous);
+            if(next == null && (previous == null || previous == BucketSyncMap.EXPUNGED)) return null;
 
             final Object witness = reference.compareAndExchange(previous, next);
             if(witness != previous) {
@@ -884,7 +884,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
             if(next != null) {
               if(witness == null) {
                 count = 1L;
-              } else if(witness == SyncMap.EXPUNGED) {
+              } else if(witness == BucketSyncMap.EXPUNGED) {
                 this.amendNode(hash, key, reference);
 
                 count = 1L;
@@ -905,28 +905,28 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         Thread.onSpinWait();
-      } else if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+      } else if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
         next = remappingFunction.apply(key, null);
         if(next == null) return null;
 
-        if(SyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
+        if(BucketSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(next)))) {
           count = 1L;
           break;
         }
 
         Thread.onSpinWait();
-      } else if(node.hash == SyncMap.NODE_MOVED) {
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
         mutable = this.forward((ForwardingNode<K, V>) node);
       } else {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
-                  next = remappingFunction.apply(key, previous == SyncMap.EXPUNGED ? null : (V) previous);
-                  if(next == null && (previous == null || previous == SyncMap.EXPUNGED)) return null;
+                  next = remappingFunction.apply(key, previous == BucketSyncMap.EXPUNGED ? null : (V) previous);
+                  if(next == null && (previous == null || previous == BucketSyncMap.EXPUNGED)) return null;
 
                   final Object witness = reference.compareAndExchange(previous, next);
                   if(witness != previous) {
@@ -935,13 +935,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     continue;
                   }
 
-                  if(next != null && (witness == null || witness == SyncMap.EXPUNGED)) {
+                  if(next != null && (witness == null || witness == BucketSyncMap.EXPUNGED)) {
                     count = 1L;
-                  } else if(next == null && (witness != null && witness != SyncMap.EXPUNGED)) {
+                  } else if(next == null && (witness != null && witness != BucketSyncMap.EXPUNGED)) {
                     if(previousNode != null) {
                       previousNode.next(node.nextPlain());
                     } else {
-                      SyncMap.setNode(mutable, index, node.nextPlain());
+                      BucketSyncMap.setNode(mutable, index, node.nextPlain());
                     }
 
                     count = -1L;
@@ -992,7 +992,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present and the value is null or expunged.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -1002,7 +1002,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object previous = reference.get();
           for(; ; ) {
-            if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
+            if(previous != null && previous != BucketSyncMap.EXPUNGED) return (V) previous;
 
             final Object witness = reference.compareAndExchange(previous, value);
             if(witness != previous) {
@@ -1011,7 +1011,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               continue;
             }
 
-            if(witness == SyncMap.EXPUNGED) {
+            if(witness == BucketSyncMap.EXPUNGED) {
               this.amendNode(hash, key, reference);
             }
 
@@ -1027,23 +1027,23 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         Thread.onSpinWait();
-      } else if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
-        if(SyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(value)))) {
+      } else if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        if(BucketSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(value)))) {
           break;
         }
 
         Thread.onSpinWait();
-      } else if(node.hash == SyncMap.NODE_MOVED) {
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
         mutable = this.forward((ForwardingNode<K, V>) node);
       } else {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
-                  if(previous != null && previous != SyncMap.EXPUNGED) return (V) previous;
+                  if(previous != null && previous != BucketSyncMap.EXPUNGED) return (V) previous;
 
                   final Object witness = reference.compareAndExchange(previous, value);
                   if(witness != previous) {
@@ -1091,7 +1091,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -1108,7 +1108,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               continue;
             }
 
-            if(witness == SyncMap.EXPUNGED) {
+            if(witness == BucketSyncMap.EXPUNGED) {
               this.amendNode(hash, key, reference);
             } else if(witness != null) {
               return (V) witness;
@@ -1126,17 +1126,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         Thread.onSpinWait();
-      } else if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
-        if(SyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(value)))) {
+      } else if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        if(BucketSyncMap.replaceNode(mutable, index, new Node<>(hash, key, new ObjectReference(value)))) {
           break;
         }
 
         Thread.onSpinWait();
-      } else if(node.hash == SyncMap.NODE_MOVED) {
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
         mutable = this.forward((ForwardingNode<K, V>) node);
       } else {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
@@ -1149,7 +1149,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                     continue;
                   }
 
-                  if(witness != null && witness != SyncMap.EXPUNGED) {
+                  if(witness != null && witness != BucketSyncMap.EXPUNGED) {
                     return (V) witness;
                   }
 
@@ -1179,17 +1179,17 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       final int length, index;
       if(!this.amended || (table == null && (table = this.mutableTable) == null) || (length = table.length) == 0) {
         return;
-      } else if((node = SyncMap.getNode(table, index = (length - 1) & hash)) == null) {
-        if(SyncMap.replaceNode(table, index, new Node<>(hash, key, reference))) {
+      } else if((node = BucketSyncMap.getNode(table, index = (length - 1) & hash)) == null) {
+        if(BucketSyncMap.replaceNode(table, index, new Node<>(hash, key, reference))) {
           return;
         }
 
         Thread.onSpinWait();
-      } else if(node.hash == SyncMap.NODE_MOVED) {
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
         table = this.forward((ForwardingNode<K, V>) node);
       } else {
         synchronized(node) {
-          if(SyncMap.getNodePlain(table, index) == node) {
+          if(BucketSyncMap.getNodePlain(table, index) == node) {
             for(; ; ) {
               final K nodeKey;
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
@@ -1230,7 +1230,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -1240,7 +1240,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object current = reference.get();
           for(; ; ) {
-            if(current == null || current == SyncMap.EXPUNGED) return null;
+            if(current == null || current == BucketSyncMap.EXPUNGED) return null;
 
             previous = reference.compareAndExchange(current, null);
             if(previous != current) {
@@ -1257,15 +1257,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutable = this.mutableTable) == null) return null;
 
       final int index;
-      if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
-                  if(current == null || current == SyncMap.EXPUNGED) return null;
+                  if(current == null || current == BucketSyncMap.EXPUNGED) return null;
 
                   previous = reference.compareAndExchange(current, null);
                   if(previous != current) {
@@ -1277,7 +1277,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if(previousNode != null) {
                     previousNode.next(node.nextPlain());
                   } else {
-                    SyncMap.setNode(mutable, index, node.nextPlain());
+                    BucketSyncMap.setNode(mutable, index, node.nextPlain());
                   }
 
                   break retry;
@@ -1318,7 +1318,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -1328,7 +1328,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object previous = reference.get();
           for(; ; ) {
-            if(previous == null || previous == SyncMap.EXPUNGED) return false;
+            if(previous == null || previous == BucketSyncMap.EXPUNGED) return false;
             if(!Objects.equals(value, previous)) return false;
 
             final Object witness = reference.compareAndExchange(previous, null);
@@ -1346,15 +1346,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutable = this.mutableTable) == null) return false;
 
       final int index;
-      if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
-                  if(previous == null || previous == SyncMap.EXPUNGED) return false;
+                  if(previous == null || previous == BucketSyncMap.EXPUNGED) return false;
                   if(!Objects.equals(value, previous)) return false;
 
                   final Object witness = reference.compareAndExchange(previous, null);
@@ -1367,7 +1367,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   if(previousNode != null) {
                     previousNode.next(node.nextPlain());
                   } else {
-                    SyncMap.setNode(mutable, index, node.nextPlain());
+                    BucketSyncMap.setNode(mutable, index, node.nextPlain());
                   }
 
                   break retry;
@@ -1411,7 +1411,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -1421,7 +1421,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object current = reference.get();
           for(; ; ) {
-            if(current == null || current == SyncMap.EXPUNGED) return null;
+            if(current == null || current == BucketSyncMap.EXPUNGED) return null;
 
             previous = reference.compareAndExchange(current, value);
             if(previous != current) {
@@ -1438,15 +1438,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutable = this.mutableTable) == null) return null;
 
       final int index;
-      if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
-                  if(current == null || current == SyncMap.EXPUNGED) return null;
+                  if(current == null || current == BucketSyncMap.EXPUNGED) return null;
 
                   previous = reference.compareAndExchange(current, value);
                   if(previous != current) {
@@ -1493,7 +1493,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(length > 0) {
         // Find the node from the immutable table and update the value if the
         // node is present.
-        node = SyncMap.getNode(immutable, (length - 1) & hash);
+        node = BucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
           if(node.hash != hash || ((nodeKey = node.key) != key && !nodeKey.equals(key))) {
             node = node.next();
@@ -1503,7 +1503,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           final ObjectReference reference = node.reference();
           Object current = reference.get();
           for(; ; ) {
-            if(current == null || current == SyncMap.EXPUNGED) return false;
+            if(current == null || current == BucketSyncMap.EXPUNGED) return false;
             if(!Objects.equals(current, oldValue)) return false;
 
             previous = reference.compareAndExchange(current, newValue);
@@ -1521,15 +1521,15 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       if(!this.amended || (mutable = this.mutableTable) == null) return false;
 
       final int index;
-      if((node = SyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
         synchronized(node) {
-          if(SyncMap.getNodePlain(mutable, index) == node) {
+          if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
               if(node.hash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
                 final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
-                  if(current == null || current == SyncMap.EXPUNGED) return false;
+                  if(current == null || current == BucketSyncMap.EXPUNGED) return false;
                   if(!Objects.equals(current, oldValue)) return false;
 
                   previous = reference.compareAndExchange(current, newValue);
@@ -1571,7 +1571,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node<K, V> node;
       while((node = traverser.advanceNode()) != null) {
         final Object current = node.referencePlain().get();
-        if(current == null || current == SyncMap.EXPUNGED) continue;
+        if(current == null || current == BucketSyncMap.EXPUNGED) continue;
 
         action.accept(node.key, (V) current);
       }
@@ -1593,7 +1593,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         final ObjectReference reference = node.referencePlain();
         Object current = reference.get();
         for(; ; ) {
-          if(current == null || current == SyncMap.EXPUNGED) continue;
+          if(current == null || current == BucketSyncMap.EXPUNGED) continue;
 
           final Object witness = reference.compareAndExchange(current, null);
           if(witness != current) {
@@ -1762,14 +1762,14 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           continue;
         }
 
-        SyncMap.TRANSFER_INDEX.setRelease(this, length);
+        BucketSyncMap.TRANSFER_INDEX.setRelease(this, length);
 
         this.capacity = length << 1;
         this.transferTable = destination = new Node[this.capacity];
         break;
       } else if(operation == StampLock.OPERATION_RESIZE
         && StampLock.phase(state) == StampLock.PHASE_RUNNING
-        && (count = StampLock.count(state)) < SyncMap.MAXIMUM_TRANSFER_THREADS) {
+        && (count = StampLock.count(state)) < BucketSyncMap.MAXIMUM_TRANSFER_THREADS) {
         nextVersion = version;
 
         if((destination = this.transferTable) == null) {
@@ -1833,8 +1833,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         if(finalize) {
-          SyncMap.TRANSFER_INDEX.setOpaque(this, 0);
-          SyncMap.TRANSFER_PROGRESS.setOpaque(this, 0);
+          BucketSyncMap.TRANSFER_INDEX.setOpaque(this, 0);
+          BucketSyncMap.TRANSFER_PROGRESS.setOpaque(this, 0);
 
           state = StampLock.withReset(nextVersion + 1);
           this.stampLock.setVolatile(state);
@@ -1879,13 +1879,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           continue;
         }
 
-        SyncMap.TRANSFER_INDEX.setRelease(this, length);
+        BucketSyncMap.TRANSFER_INDEX.setRelease(this, length);
 
         this.transferTable = destination = new Node[length];
         break;
       } else if(operation == StampLock.OPERATION_AMEND
         && StampLock.phase(state) == StampLock.PHASE_RUNNING
-        && (count = StampLock.count(state)) < SyncMap.MAXIMUM_TRANSFER_THREADS) {
+        && (count = StampLock.count(state)) < BucketSyncMap.MAXIMUM_TRANSFER_THREADS) {
         nextVersion = version;
 
         if((destination = this.transferTable) == null) {
@@ -1950,8 +1950,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
         }
 
         if(finalize) {
-          SyncMap.TRANSFER_INDEX.setOpaque(this, 0);
-          SyncMap.TRANSFER_PROGRESS.setOpaque(this, 0);
+          BucketSyncMap.TRANSFER_INDEX.setOpaque(this, 0);
+          BucketSyncMap.TRANSFER_PROGRESS.setOpaque(this, 0);
 
           state = StampLock.withReset(nextVersion + 1);
           this.stampLock.setVolatile(state);
@@ -2029,8 +2029,8 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     final int capacity = source.length, nextCapacity = destination.length;
 
     int stride;
-    if((stride = SyncMap.NCPU > 1 ? (capacity >>> 3) / SyncMap.NCPU : capacity) < SyncMap.MINIMUM_TRANSFER_STRIDE) {
-      stride = SyncMap.MINIMUM_TRANSFER_STRIDE;
+    if((stride = BucketSyncMap.NCPU > 1 ? (capacity >>> 3) / BucketSyncMap.NCPU : capacity) < BucketSyncMap.MINIMUM_TRANSFER_STRIDE) {
+      stride = BucketSyncMap.MINIMUM_TRANSFER_STRIDE;
     }
 
     final ForwardingNode<K, V> forwardingNode = new ForwardingNode<>(destination);
@@ -2041,13 +2041,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node<K, V> node;
       int index, bound = 0;
 
-      index = (int) SyncMap.TRANSFER_INDEX.getAcquire(this);
+      index = (int) BucketSyncMap.TRANSFER_INDEX.getAcquire(this);
       for(; ; ) {
         final int witness;
         if(index <= 0) {
           index = -1;
           break;
-        } else if((witness = (int) SyncMap.TRANSFER_INDEX.compareAndExchangeAcquire(this, index, bound = (index > stride ? index - stride : 0))) == index) {
+        } else if((witness = (int) BucketSyncMap.TRANSFER_INDEX.compareAndExchangeAcquire(this, index, bound = (index > stride ? index - stride : 0))) == index) {
           delta = index - bound;
           break;
         }
@@ -2067,13 +2067,13 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           break;
         } else if(i < bound) {
           break;
-        } else if((node = SyncMap.getNode(source, i)) == null) {
-          advance = !resize || SyncMap.replaceNode(source, i, forwardingNode);
-        } else if(node.hash == SyncMap.NODE_MOVED) {
+        } else if((node = BucketSyncMap.getNode(source, i)) == null) {
+          advance = !resize || BucketSyncMap.replaceNode(source, i, forwardingNode);
+        } else if(node.hash == BucketSyncMap.NODE_MOVED) {
           advance = true;
         } else {
           synchronized(node) {
-            if(SyncMap.getNodePlain(source, i) == node) {
+            if(BucketSyncMap.getNodePlain(source, i) == node) {
               Node<K, V> loHead = null, loTail = null;
               Node<K, V> hiHead = null, hiTail = null;
               Node<K, V> next = node;
@@ -2085,7 +2085,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                 if(!resize) {
                   for(; ; ) {
                     final Object current = reference.get();
-                    if(current == SyncMap.EXPUNGED) continue retry;
+                    if(current == BucketSyncMap.EXPUNGED) continue retry;
                     if(current != null) break;
 
                     if(!reference.expunge()) {
@@ -2097,7 +2097,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
                   }
                 }
 
-                final SyncMap.Node<K, V> cloned = new SyncMap.Node<>(node.hash, node.key, reference);
+                final BucketSyncMap.Node<K, V> cloned = new BucketSyncMap.Node<>(node.hash, node.key, reference);
                 if((node.hash & capacity) == 0) {
                   if(loTail == null) {
                     loHead = cloned;
@@ -2118,19 +2118,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
               }
 
               if(resize) {
-                if(loHead != null) SyncMap.setNode(destination, i, loHead);
-                if(hiHead != null) SyncMap.setNode(destination, i + capacity, hiHead);
+                if(loHead != null) BucketSyncMap.setNode(destination, i, loHead);
+                if(hiHead != null) BucketSyncMap.setNode(destination, i + capacity, hiHead);
               } else {
                 if(loTail != null) {
                   loTail.next(hiHead);
 
-                  if(loHead != null) SyncMap.setNode(destination, i, loHead);
+                  if(loHead != null) BucketSyncMap.setNode(destination, i, loHead);
                 } else {
-                  if(hiHead != null) SyncMap.setNode(destination, i, hiHead);
+                  if(hiHead != null) BucketSyncMap.setNode(destination, i, hiHead);
                 }
               }
 
-              if(resize) SyncMap.setNode(source, i, forwardingNode);
+              if(resize) BucketSyncMap.setNode(source, i, forwardingNode);
               advance = true;
             }
           }
@@ -2140,11 +2140,11 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       }
 
       if(delta > 0) {
-        progress = (int) SyncMap.TRANSFER_PROGRESS.getAcquire(this);
+        progress = (int) BucketSyncMap.TRANSFER_PROGRESS.getAcquire(this);
         for(; ; ) {
           if(progress >= capacity) break;
 
-          final int witness = (int) SyncMap.TRANSFER_PROGRESS.compareAndExchangeRelease(this, progress, progress + delta);
+          final int witness = (int) BucketSyncMap.TRANSFER_PROGRESS.compareAndExchangeRelease(this, progress, progress + delta);
           if(witness == progress) {
             progress += delta;
             delta = 0;
@@ -2300,19 +2300,19 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     private boolean valueExists() {
       final Object value;
-      return (value = ObjectReference.VALUE.getOpaque(this)) != null && value != SyncMap.EXPUNGED;
+      return (value = ObjectReference.VALUE.getOpaque(this)) != null && value != BucketSyncMap.EXPUNGED;
     }
 
     @SuppressWarnings("unchecked")
     private <V> @Nullable V value() {
       final Object value;
-      return (value = ObjectReference.VALUE.getAcquire(this)) != SyncMap.EXPUNGED ? (V) value : null;
+      return (value = ObjectReference.VALUE.getAcquire(this)) != BucketSyncMap.EXPUNGED ? (V) value : null;
     }
 
     @SuppressWarnings("unchecked")
     private <V> V valueOr(final V defaultValue) {
       final Object value;
-      return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != SyncMap.EXPUNGED) ? (V) value : defaultValue;
+      return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != BucketSyncMap.EXPUNGED) ? (V) value : defaultValue;
     }
 
     private @Nullable Object get() {
@@ -2320,7 +2320,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     }
 
     private boolean expunge() {
-      return ObjectReference.VALUE.compareAndExchangeRelease(this, null, SyncMap.EXPUNGED) == null;
+      return ObjectReference.VALUE.compareAndExchangeRelease(this, null, BucketSyncMap.EXPUNGED) == null;
     }
 
     private @Nullable Object compareAndExchange(final @Nullable Object expect, final @Nullable Object update) {
@@ -2413,7 +2413,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
     private transient final Node<K, V>[] nextTable;
 
     private ForwardingNode(final Node<K, V>[] nextTable) {
-      super(SyncMap.NODE_MOVED, null, null);
+      super(BucketSyncMap.NODE_MOVED, null, null);
 
       this.nextTable = nextTable;
     }
@@ -2428,9 +2428,9 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       K nodeKey;
 
       while((length = table.length) > 0) {
-        if((node = SyncMap.getNode(table, (length - 1) & hash)) == null) {
+        if((node = BucketSyncMap.getNode(table, (length - 1) & hash)) == null) {
           return null;
-        } else if((nodeHash = node.hash) == SyncMap.NODE_MOVED) {
+        } else if((nodeHash = node.hash) == BucketSyncMap.NODE_MOVED) {
           table = ((ForwardingNode<K, V>) node).nextTable;
         } else {
           if(nodeHash == hash && ((nodeKey = node.key) == key || nodeKey.equals(key))) {
@@ -2477,7 +2477,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
 
     @Override
     public @Nullable V setValue(final V value) {
-      final V previous = SyncMap.this.put(this.key, value);
+      final V previous = BucketSyncMap.this.put(this.key, value);
       this.value = value;
       return previous;
     }
@@ -2507,31 +2507,31 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
   private final class EntrySet extends AbstractSet<Map.Entry<K, V>> {
     @Override
     public int size() {
-      return SyncMap.this.size();
+      return BucketSyncMap.this.size();
     }
 
     @Override
     public boolean contains(final @Nullable Object entry) {
       if(!(entry instanceof final Map.Entry<?,?> that)) return false;
-      final V value = SyncMap.this.get(that.getKey());
+      final V value = BucketSyncMap.this.get(that.getKey());
       return value != null && Objects.equals(value, that.getValue());
     }
 
     @Override
     public boolean remove(final @Nullable Object entry) {
       if(!(entry instanceof final Map.Entry<?,?> that)) return false;
-      return SyncMap.this.remove(that.getKey(), that.getValue());
+      return BucketSyncMap.this.remove(that.getKey(), that.getValue());
     }
 
     @Override
     public void clear() {
-      SyncMap.this.clear();
+      BucketSyncMap.this.clear();
     }
 
     @Override
     public Iterator<Map.Entry<K, V>> iterator() {
-      SyncMap.this.promote(true);
-      return new EntryIterator(SyncMap.this.immutableTable);
+      BucketSyncMap.this.promote(true);
+      return new EntryIterator(BucketSyncMap.this.immutableTable);
     }
   }
 
@@ -2568,7 +2568,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       final Map.Entry<K, V> current;
       if((current = this.current) == null) throw new IllegalStateException();
       this.current = null;
-      SyncMap.this.remove(current.getKey(), current.getValue());
+      BucketSyncMap.this.remove(current.getKey(), current.getValue());
     }
 
     @SuppressWarnings("unchecked")
@@ -2578,7 +2578,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
       Node<K, V> node;
       while((node = this.advanceNode()) != null) {
         final Object current = node.referencePlain().get();
-        if(current == null || current == SyncMap.EXPUNGED) continue;
+        if(current == null || current == BucketSyncMap.EXPUNGED) continue;
 
         this.next = new MapEntry(node.key, (V) current);
         break;
@@ -2619,7 +2619,7 @@ public class SyncMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K,
           return this.next = null;
         }
 
-        node = SyncMap.getNode(this.table, index);
+        node = BucketSyncMap.getNode(this.table, index);
 
         this.index++;
       }

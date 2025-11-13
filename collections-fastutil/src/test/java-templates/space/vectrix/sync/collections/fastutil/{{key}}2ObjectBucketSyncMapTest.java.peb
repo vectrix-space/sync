@@ -8,10 +8,10 @@ import it.unimi.dsi.fastutil.{{ group }}.{{ key }}2ObjectMap;
  * @since 1.0.0
  */
 @SuppressWarnings({"deprecation"})
-public class {{ key }}2ObjectSyncMapTest extends {{ key }}2ObjectAbstractMapTest<String> {
+public class {{ key }}2ObjectBucketSyncMapTest extends {{ key }}2ObjectAbstractMapTest<String> {
   @Override
   protected {{ key }}2ObjectMap<String> createMap() {
-    return new {{ key }}2ObjectSyncMap<>();
+    return new {{ key }}2ObjectBucketSyncMap<>();
   }
 
   @Override

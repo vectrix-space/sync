@@ -26,14 +26,14 @@ package space.vectrix.sync.collections;
 import java.util.Map;
 
 /**
- * Provides {@link SyncMap} specific test data for {@link AbstractMapTest}.
+ * Provides {@link BucketSyncMap} specific test data for {@link AbstractMapTest}.
  *
  * @since 1.0.0
  */
-public class SyncMapTest extends AbstractMapTest<String, String> {
+public class BucketSyncMapTest extends AbstractMapTest<String, String> {
   @Override
   protected Map<String, String> createMap() {
-    return new SyncMap<>();
+    return new BucketSyncMap<>();
   }
 
   @Override
