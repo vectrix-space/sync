@@ -13,7 +13,7 @@
 
 > This project is experimental and not considered stable for production yet.
 
-Provides thread-safe utilities for highly concurrent scenarios in Java.
+Provides thread-safe utilities for highly concurrent scenarios in Java 17+.
 
 * [Sync Collections](collections/readme.md)
 * [Sync Collections `fastutil`](collections-fastutil/readme.md)

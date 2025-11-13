@@ -15,9 +15,9 @@
 
 > This project is experimental and not considered stable for production yet.
 
-Provides concurrent thread-safe collections for highly concurrent scenarios in Java.
+Provides concurrent thread-safe collections for highly concurrent scenarios in Java 17+.
 
-* **SyncMap**: A high-performance implementation of `ConcurrentMap` in Java.
+* **SyncMap**: A high-performance implementation of `ConcurrentMap`.
 
   * Fully compatible with the Java Collections Framework (`ConcurrentMap`).
   * Delivers up to **2× higher update throughput** than `ConcurrentHashMap` under heavy contention, while matching its performance for reads and other operations.
