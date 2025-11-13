@@ -13,8 +13,6 @@
 
 </div>
 
-> This project is experimental and not considered stable for production yet.
-
 Provides concurrent thread-safe collections for highly concurrent scenarios with `fastutil` in Java 17+.
 
 * **X2ObjectSyncMap**: A high-performance implementation of `X2ObjectMap`'s with `fastutil`.

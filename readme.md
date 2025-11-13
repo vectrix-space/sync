@@ -11,8 +11,6 @@
 
 </div>
 
-> This project is experimental and not considered stable for production yet.
-
 Provides thread-safe utilities for highly concurrent scenarios in Java 17+.
 
 * [Sync Collections](collections/readme.md)

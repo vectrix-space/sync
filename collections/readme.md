@@ -13,8 +13,6 @@
 
 </div>
 
-> This project is experimental and not considered stable for production yet.
-
 Provides concurrent thread-safe collections for highly concurrent scenarios in Java 17+.
 
 * **SyncMap**: A high-performance implementation of `ConcurrentMap`.
