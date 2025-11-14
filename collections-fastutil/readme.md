@@ -15,7 +15,7 @@
 
 Provides concurrent thread-safe collections for highly concurrent scenarios with `fastutil` in Java 17+.
 
-* **X2ObjectSyncMap**: A high-performance implementation of `X2ObjectMap`'s with `fastutil`.
+* **X2ObjectBucketSyncMap**: A high-performance implementation of `X2ObjectMap`'s with `fastutil`.
 
   * Fully compatible with the `fastutil` X2Object collections.
   * Delivers up to **40× higher read and write throughput** than `X2ObjectMaps#synchronize()` under heavy contention.
