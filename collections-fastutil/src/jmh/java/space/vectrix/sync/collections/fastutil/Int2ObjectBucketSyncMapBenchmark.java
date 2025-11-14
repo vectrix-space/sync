@@ -21,13 +21,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-package space.vectrix.sync.collections;
+package space.vectrix.sync.collections.fastutil;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMaps;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import java.util.SplittableRandom;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -49,10 +48,10 @@ import org.openjdk.jmh.infra.Blackhole;
 @Measurement(iterations = 5)
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-public class SyncMapBenchmark {
+public class Int2ObjectBucketSyncMapBenchmark {
   @State(Scope.Benchmark)
   public static class Container {
-    @Param({ "SyncMap", "ConcurrentHashMap", "SynchronizedMap" })
+    @Param({ "BucketSyncMap", "SynchronizedMap" })
     private String implementation;
 
     @Param({ "none", "presize", "prepopulate" })
@@ -64,7 +63,7 @@ public class SyncMapBenchmark {
     @Param({ "100000" })
     private int size;
 
-    private Map<Integer, Integer> map;
+    private Int2ObjectMap<Integer> map;
 
     @Setup(Level.Iteration)
     public void setup() {
@@ -72,23 +71,22 @@ public class SyncMapBenchmark {
       final boolean prepopulate = "prepopulate".equalsIgnoreCase(this.mode);
 
       switch(this.implementation) {
-        case "SyncMap" -> this.map = presized ? new BucketSyncMap<>(BucketSyncMap.FASTEST_SPREAD, this.size) : new BucketSyncMap<>(BucketSyncMap.FASTEST_SPREAD);
-        case "ConcurrentHashMap" -> this.map = presized ? new ConcurrentHashMap<>(this.size) : new ConcurrentHashMap<>();
+        case "BucketSyncMap" -> this.map = presized ? new Int2ObjectBucketSyncMap<>(Int2ObjectBucketSyncMap.FASTEST_SPREAD, this.size) : new Int2ObjectBucketSyncMap<>(Int2ObjectBucketSyncMap.FASTEST_SPREAD);
         case "SynchronizedMap" -> this.map = presized
-          ? Collections.synchronizedMap(new HashMap<>(this.size))
-          : Collections.synchronizedMap(new HashMap<>());
+          ? Int2ObjectMaps.synchronize(new Int2ObjectOpenHashMap<>(this.size))
+          : Int2ObjectMaps.synchronize(new Int2ObjectOpenHashMap<>());
         default -> throw new IllegalArgumentException("Unable to identify implementation: " + this.implementation);
       }
 
       if(prepopulate) {
         for(int i = 0; i < this.size; i++) {
-          this.map.put(i, i);
+          this.map.put(i, Integer.valueOf(i));
         }
       }
 
       if(this.prime) {
-        if(this.map instanceof final BucketSyncMap<Integer, Integer> bucketSyncMap) {
-          bucketSyncMap.promote(true);
+        if(this.map instanceof final Int2ObjectBucketSyncMap<Integer> syncMap) {
+          syncMap.promote(true);
         } else {
           for(int i = 0; i < this.size; i++) {
             this.map.get(i);
@@ -138,7 +136,7 @@ public class SyncMapBenchmark {
   @Threads(8)
   public void put_only(final Container container, final Sample sample, final Blackhole blackhole) {
     final int key = sample.next();
-    blackhole.consume(container.map.put(key, key));
+    blackhole.consume(container.map.put(key, Integer.valueOf(key)));
   }
 
   @Benchmark
@@ -149,7 +147,7 @@ public class SyncMapBenchmark {
     if(sample.isRead[key]) {
       blackhole.consume(container.map.get(key));
     } else {
-      blackhole.consume(container.map.put(key, key));
+      blackhole.consume(container.map.put(key, Integer.valueOf(key)));
     }
   }
 }
