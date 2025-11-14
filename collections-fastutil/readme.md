@@ -28,7 +28,7 @@ Sync is available at the Maven Central Repository.
 
 ```kotlin
 dependencies {
-  implementation("space.vectrix:sync-collections-fastutil:1.0.0-SNAPSHOT")
+  implementation("space.vectrix:sync-collections-fastutil:1.0.0")
 }
 ```
 
@@ -38,7 +38,7 @@ dependencies {
 <dependency>
   <groupId>space.vectrix</groupId>
   <artifactId>sync-collections-fastutil</artifactId>
-  <version>1.0.0-SNAPSHOT</version>
+  <version>1.0.0</version>
 </dependency>
 ```
 
