@@ -405,12 +405,12 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     final int hash = this.spreadFunction.spread(key);
 
     if(length > 0 && (node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
-      if(node.hash == hash && node.key == key) {
+      if(node.key == key) {
         return node.referencePlain().valueExists();
       }
 
       while((node = node.nextPlain()) != null) {
-        if(node.hash == hash && node.key == key) {
+        if(node.key == key) {
           return node.referencePlain().valueExists();
         }
       }
@@ -419,13 +419,12 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       boolean exists = false;
       retry: if((node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
-        final int nodeHash;
-        if((nodeHash = node.hash) == hash) {
+        if(node.hash >= 0) {
           if(node.key == key) {
             exists = node.reference().valueExists();
             break retry;
           }
-        } else if(nodeHash < 0) {
+        } else {
           final Node nextNode;
           if((nextNode = node.find(hash, key)) != null) {
             exists = nextNode.reference().valueExists();
@@ -434,7 +433,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         }
 
         while((node = node.next()) != null) {
-          if(node.hash == hash && node.key == key) {
+          if(node.key == key) {
             exists = node.reference().valueExists();
             break retry;
           }
@@ -466,12 +465,12 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     final int hash = this.spreadFunction.spread(key);
 
     if(length > 0 && (node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
-      if(node.hash == hash && node.key == key) {
+      if(node.key == key) {
         return node.referencePlain().value();
       }
 
       while((node = node.nextPlain()) != null) {
-        if(node.hash == hash && node.key == key) {
+        if(node.key == key) {
           return node.referencePlain().value();
         }
       }
@@ -480,13 +479,12 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     if(this.amended && (table = this.mutableTable) != null && (length = table.length) > 0) {
       V value = null;
       retry: if((node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
-        final int nodeHash;
-        if((nodeHash = node.hash) == hash) {
+        if(node.hash >= 0) {
           if(node.key == key) {
             value = node.reference().value();
             break retry;
           }
-        } else if(nodeHash < 0) {
+        } else {
           final Node nextNode;
           if((nextNode = node.find(hash, key)) != null) {
             value = nextNode.reference().value();
@@ -495,7 +493,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         }
 
         while((node = node.next()) != null) {
-          if(node.hash == hash && node.key == key) {
+          if(node.key == key) {
             value = node.reference().value();
             break retry;
           }
@@ -529,12 +527,12 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     final int hash = this.spreadFunction.spread(key);
 
     if(length > 0 && (node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
-      if(node.hash == hash && node.key == key) {
+      if(node.key == key) {
         return node.referencePlain().valueOr(defaultValue);
       }
 
       while((node = node.nextPlain()) != null) {
-        if(node.hash == hash && node.key == key) {
+        if(node.key == key) {
           return node.referencePlain().valueOr(defaultValue);
         }
       }
@@ -544,12 +542,12 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
       V value = defaultValue;
       retry: if((node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) != null) {
         final int nodeHash;
-        if((nodeHash = node.hash) == hash) {
+        if(node.hash >= 0) {
           if(node.key == key) {
             value = node.reference().valueOr(defaultValue);
             break retry;
           }
-        } else if(nodeHash < 0) {
+        } else {
           final Node nextNode;
           if((nextNode = node.find(hash, key)) != null) {
             value = nextNode.reference().valueOr(defaultValue);
@@ -558,7 +556,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         }
 
         while((node = node.next()) != null) {
-          if(node.hash == hash && node.key == key) {
+          if(node.key == key) {
             value = node.reference().valueOr(defaultValue);
             break retry;
           }
@@ -605,7 +603,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present and the value is null or expunged.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -656,7 +654,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -727,7 +725,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present and the value is null or expunged.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -778,7 +776,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -869,7 +867,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -903,7 +901,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node previousNode = null; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -980,7 +978,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1038,7 +1036,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node previousNode = null; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -1054,7 +1052,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
 
                   if(next != null && (witness == null || witness == {{ key }}2ObjectBucketSyncMap.EXPUNGED)) {
                     count = 1L;
-                  } else if(next == null && (witness != null && witness != {{ key }}2ObjectBucketSyncMap.EXPUNGED)) {
+                  } else if(next == null) {
                     if(previousNode != null) {
                       previousNode.next(node.nextPlain());
                     } else {
@@ -1109,7 +1107,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present and the value is null or expunged.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1154,7 +1152,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -1206,7 +1204,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1251,7 +1249,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -1304,7 +1302,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(table, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 node.reference(reference);
                 return;
               }
@@ -1349,7 +1347,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1378,7 +1376,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node previousNode = null; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
@@ -1442,7 +1440,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1472,7 +1470,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node previousNode = null; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object previous = reference.get();
                 for(; ; ) {
@@ -1540,7 +1538,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1569,7 +1567,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
@@ -1627,7 +1625,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         // node is present.
         node = {{ key }}2ObjectBucketSyncMap.getNode(immutable, (length - 1) & hash);
         while(node != null) {
-          if(node.hash != hash || node.key != key) {
+          if(node.key != key) {
             node = node.next();
             continue;
           }
@@ -1657,7 +1655,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
         synchronized(node) {
           if({{ key }}2ObjectBucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
-              if(node.hash == hash && node.key == key) {
+              if(node.key == key) {
                 final ObjectReference reference = node.referencePlain();
                 Object current = reference.get();
                 for(; ; ) {
@@ -2520,7 +2518,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
       Node node = this;
 
       do {
-        if(node.hash == hash && node.key == key) return node;
+        if(node.key == key) return node;
       } while((node = node.next()) != null);
 
       return null;
@@ -2545,20 +2543,18 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
       int length;
 
       Node node;
-      int nodeHash;
-
       while((length = table.length) > 0) {
         if((node = {{ key }}2ObjectBucketSyncMap.getNode(table, (length - 1) & hash)) == null) {
           return null;
-        } else if((nodeHash = node.hash) == {{ key }}2ObjectBucketSyncMap.NODE_MOVED) {
+        } else if(node.hash == {{ key }}2ObjectBucketSyncMap.NODE_MOVED) {
           table = ((ForwardingNode) node).nextTable;
         } else {
-          if(nodeHash == hash && node.key == key) {
+          if(node.key == key) {
             return node;
           }
 
           while((node = node.next()) != null) {
-            if(node.hash == hash && node.key == key) {
+            if(node.key == key) {
               return node;
             }
           }
