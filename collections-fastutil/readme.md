@@ -7,7 +7,7 @@
 
 ![Build Status](https://github.com/vectrix-space/sync/actions/workflows/build.yml/badge.svg)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](license.txt)
-[![Discord](https://img.shields.io/discord/819522977586348052)](https://discord.gg/rYpaxPFQrj)
+[![Discord](https://img.shields.io/discord/819522977586348052)](https://discord.gg/chpEj5UC45)
 [![Maven Central](https://img.shields.io/maven-central/v/space.vectrix/sync-collections-fastutil?label=stable)](https://search.maven.org/search?q=g:space.vectrix%20AND%20a:sync*)
 ![Maven Snapshot Version](https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fcentral.sonatype.com%2Frepository%2Fmaven-snapshots%2Fspace%2Fvectrix%2Fsync-collections-fastutil%2Fmaven-metadata.xml&query=%2Fmetadata%2Fversioning%2Flatest&label=dev)
 

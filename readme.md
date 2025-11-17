@@ -7,7 +7,7 @@
 
 ![Build Status](https://github.com/vectrix-space/sync/actions/workflows/build.yml/badge.svg)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](license.txt)
-[![Discord](https://img.shields.io/discord/819522977586348052)](https://discord.gg/rYpaxPFQrj)
+[![Discord](https://img.shields.io/discord/819522977586348052)](https://discord.gg/chpEj5UC45)
 
 </div>
 
