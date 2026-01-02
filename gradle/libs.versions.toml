@@ -2,7 +2,7 @@
 version = "1.0"
 
 [versions]
-checkstyle = "12.2.0"
+checkstyle = "12.3.1"
 fastutil = "8.5.18"
 indra = "4.0.0"
 jmh = "1.37"
