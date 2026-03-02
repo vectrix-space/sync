@@ -10,7 +10,7 @@ jmhPlugin = "0.7.3"
 junit = "6.0.2"
 
 [libraries]
-jetbrainsAnnotations = "org.jetbrains:annotations:26.0.2-1"
+jetbrainsAnnotations = "org.jetbrains:annotations:26.1.0"
 jspecify = "org.jspecify:jspecify:1.0.0"
 
 fastutil = { module = "it.unimi.dsi:fastutil", version.ref = "fastutil" }
