@@ -1,10 +1,8 @@
-import com.diffplug.gradle.spotless.FormatExtension
 import me.champeau.jmh.JMHPlugin
 import me.champeau.jmh.JmhParameters
 
 plugins {
   id("sync.base-conventions")
-  id("net.kyori.indra")
   id("net.kyori.indra.checkstyle")
   id("net.kyori.indra.licenser.spotless")
 }
