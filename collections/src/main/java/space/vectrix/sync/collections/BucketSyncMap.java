@@ -299,13 +299,11 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
    * Represents the transfer index a thread may claim a range of when
    * participating in a transfer operation.
    */
-  @SuppressWarnings("unused")
   private transient int transferIndex;
 
   /**
    * Represents the transfer progress threads will add completed ranges to.
    */
-  @SuppressWarnings("unused")
   private transient int transferProgress;
 
   /**
