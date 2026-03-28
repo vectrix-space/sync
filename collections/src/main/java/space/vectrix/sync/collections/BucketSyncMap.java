@@ -40,7 +40,6 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import org.jetbrains.annotations.UnknownNullability;
-import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import static java.util.Objects.requireNonNull;
@@ -428,7 +427,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   public boolean containsKey(final Object key) {
     requireNonNull(key, "key");
 
-    Node<K, V>[] table = this.immutableTable;
+    Node<K, V>@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
     Node<K, V> node;
 
@@ -483,7 +482,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   public @Nullable V get(final Object key) {
     requireNonNull(key, "key");
 
-    Node<K, V>[] table = this.immutableTable;
+    Node<K, V>@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
     Node<K, V> node;
 
@@ -539,7 +538,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     requireNonNull(key, "key");
     requireNonNull(defaultValue, "defaultValue");
 
-    Node<K, V>[] table = this.immutableTable;
+    Node<K, V>@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
     Node<K, V> node;
 
@@ -609,7 +608,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
 
     V next;
 
-    Node<K, V>[] immutable, mutable = null;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -734,7 +734,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     V next;
     long count = 0L;
 
-    Node<K, V>[] immutable, mutable;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node<K, V> node;
 
@@ -847,7 +848,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     V next;
     long count = 0L;
 
-    Node<K, V>[] immutable, mutable = null;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -974,11 +976,12 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V putIfAbsent(final @NonNull K key, final V value) {
+  public @Nullable V putIfAbsent(final K key, final V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable = null;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -1077,7 +1080,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable = null;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -1173,7 +1177,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   }
 
   private void amendNode(final int hash, final K key, final ObjectReference reference) {
-    Node<K, V>[] table = this.mutableTable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] table = this.mutableTable;
 
     for(Node<K, V> node; ; ) {
       final int length, index;
@@ -1216,7 +1220,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
 
     Object previous;
 
-    Node<K, V>[] immutable, mutable;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node<K, V> node;
 
@@ -1304,7 +1309,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
-    Node<K, V>[] immutable, mutable;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node<K, V> node;
 
@@ -1391,13 +1397,14 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V replace(final @NonNull K key, final @NonNull V value) {
+  public @Nullable V replace(final K key, final V value) {
     requireNonNull(key, "key");
     requireNonNull(value, "value");
 
     Object previous;
 
-    Node<K, V>[] immutable, mutable;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node<K, V> node;
 
@@ -1472,14 +1479,15 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   }
 
   @Override
-  public boolean replace(final @NonNull K key, final @NonNull V oldValue, final @NonNull V newValue) {
+  public boolean replace(final K key, final V oldValue, final V newValue) {
     requireNonNull(key, "key");
     requireNonNull(oldValue, "oldValue");
     requireNonNull(newValue, "newValue");
 
     Object previous;
 
-    Node<K, V>[] immutable, mutable;
+    Node<K, V>[] immutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node<K, V> node;
 
@@ -1685,7 +1693,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   private Node<K, V>@Nullable [] initialize() {
     long state;
 
-    Node<K, V>[] source, destination;
+    Node<K, V>[] source;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] destination;
 
     int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_INITIALIZE, StampLock.PHASE_RUNNING, 1, 0);
@@ -1733,7 +1742,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   private void resize() {
     long state;
 
-    Node<K, V>[] source, destination;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] source;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] destination;
     int length;
 
     int operation, version, nextVersion, count, phase;
@@ -1853,7 +1863,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   private void amend() {
     long state;
 
-    Node<K, V>[] source, destination;
+    Node<K, V>[] source;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] destination;
     int length;
 
     int operation, version, nextVersion, count, phase;
@@ -1971,7 +1982,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   protected void promote(final boolean wait) {
     long state;
 
-    Node<K, V>[] source;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] source;
 
     int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_PROMOTE, StampLock.PHASE_RUNNING, 1, 0);
@@ -2354,7 +2365,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     }
 
     private final int hash;
-    private final K key;
+    private final @UnknownNullability K key;
     private @Nullable ObjectReference reference;
     private @Nullable Node<K, V> next;
 
