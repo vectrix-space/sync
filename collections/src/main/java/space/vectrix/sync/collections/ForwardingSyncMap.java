@@ -134,7 +134,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
    * @since 1.1.0
    */
   public ForwardingSyncMap(final IntFunction<Map<K, ObjectReference>> function, final int initialCapacity) {
-    if(initialCapacity < 0) throw new IllegalArgumentException("Initial capacity must be greater than 0");
+    if(initialCapacity < 0) throw new IllegalArgumentException("Initial capacity must be non-negative");
     this.function = function;
     this.immutable = this.function.apply(initialCapacity);
   }
@@ -380,7 +380,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
       if((reference = this.immutable.get(key)) != null) {
         previous = reference.get();
         for(; ; ) {
-          next = remappingFunction.apply(key, (V) previous);
+          next = remappingFunction.apply(key, previous == ForwardingSyncMap.EXPUNGED ? null : (V) previous);
 
           final Object witness = reference.compareAndExchange(previous, next);
           if(witness != previous) {
@@ -398,7 +398,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
       } else if(this.mutable != null && (reference = this.mutable.get(key)) != null) {
         previous = reference.get();
         for(; ; ) {
-          next = remappingFunction.apply(key, (V) previous);
+          next = remappingFunction.apply(key, previous == ForwardingSyncMap.EXPUNGED ? null : (V) previous);
 
           final Object witness = reference.compareAndExchange(previous, next);
           if(witness != previous) {
@@ -467,6 +467,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
 
           if(witness == ForwardingSyncMap.EXPUNGED) {
             this.mutable.put(key, reference);
+            return null;
           }
 
           break;
@@ -481,6 +482,10 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
             previous = witness;
             Thread.onSpinWait();
             continue;
+          }
+
+          if(witness == ForwardingSyncMap.EXPUNGED) {
+            return null;
           }
 
           break;
@@ -535,6 +540,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
 
           if(witness == ForwardingSyncMap.EXPUNGED) {
             this.mutable.put(key, reference);
+            return null;
           }
 
           break;
@@ -547,6 +553,10 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
             previous = witness;
             Thread.onSpinWait();
             continue;
+          }
+
+          if(witness == ForwardingSyncMap.EXPUNGED) {
+            return null;
           }
 
           break;
@@ -587,8 +597,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
     }
 
     synchronized(this.lock) {
-      if(this.immutable.get(key) == null && this.amended) {
-        reference = this.mutable.remove(key);
+      if(this.immutable.get(key) == null && this.amended && (reference = this.mutable.remove(key)) != null) {
         return reference.value();
       }
     }
@@ -620,8 +629,10 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
 
     synchronized(this.lock) {
       if(this.immutable.get(key) == null && this.amended && (reference = this.mutable.get(key)) != null) {
+        boolean removed = false;
+
         previous = reference.get();
-        while(previous != null) {
+        while(previous != null && previous != ForwardingSyncMap.EXPUNGED) {
           if(!Objects.equals(previous, value)) return false;
 
           final Object witness = reference.compareAndExchange(previous, null);
@@ -631,11 +642,12 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
             continue;
           }
 
+          removed = true;
           break;
         }
 
         this.mutable.remove(key);
-        return true;
+        return removed;
       }
     }
 
@@ -722,7 +734,8 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
 
   @Override
   public Set<Map.Entry<K, V>> entrySet() {
-    if(this.entrySet != null) return this.entrySet;
+    final EntrySet entrySet;
+    if((entrySet = this.entrySet) != null) return entrySet;
     return this.entrySet = new EntrySet();
   }
 
@@ -870,7 +883,7 @@ public class ForwardingSyncMap<K extends @Nullable Object, V> extends AbstractMa
 
     @Override
     public int hashCode() {
-      return Objects.hash(this.key, this.value);
+      return Objects.hashCode(this.key) ^ Objects.hashCode(this.value);
     }
 
     @Override
