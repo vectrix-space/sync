@@ -12,6 +12,11 @@
       "description": "Prevent upgrade to Checkstyle 13+, that requires Java 21+.",
       "matchPackageNames": ["com.puppycrawl.tools:checkstyle"],
       "allowedVersions": "<13.0.0"
+    },
+    {
+      "description": "Prevent upgrade to JUnit 5+, for the Guava test suite.",
+      "matchPackageNames": ["junit:junit"],
+      "allowedVersions": "<5.0.0"
     }
   ]
 }
