@@ -2,7 +2,7 @@
 <!DOCTYPE suppressions PUBLIC "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN" "http://checkstyle.org/dtds/suppressions_1_2.dtd">
 <suppressions>
   <!-- ignore javadocs on tests and jmh -->
-  <suppress files="src[\\/](test|jmh)[\\/]java[\\/].*" checks="(FilteringWriteTag|JavadocPackage|MissingJavadoc.*)"/>
+  <suppress files="src[\\/](test|googleTest|jmh)[\\/]java[\\/].*" checks="(FilteringWriteTag|JavadocPackage|MissingJavadoc.*)"/>
   <suppress files="build[\\/]generated[\\/]sources[\\/]blossom[\\/](test|jmh)[\\/]java[\\/].*" checks="(FilteringWriteTag|JavadocPackage|MissingJavadoc.*)"/>
 
   <!-- ignore import order and missing package-info in generated variants -->

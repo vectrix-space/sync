@@ -3,8 +3,6 @@ plugins {
   id("net.kyori.indra.publishing")
 }
 
-var libs = extensions.getByType(org.gradle.accessors.dm.LibrariesForLibs::class)
-
 indra {
   javaVersions {
     minimumToolchain(17)
