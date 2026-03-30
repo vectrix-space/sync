@@ -397,6 +397,13 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
   public BucketSyncMap(final SpreadFunction spreadFunction, final int initialCapacity, final float loadFactor) {
+    requireNonNull(spreadFunction, "spreadFunction");
+
+    if(initialCapacity < 0) throw new IllegalArgumentException("Initial capacity must be non-negative");
+    if(loadFactor <= 0.0f || !Float.isFinite(loadFactor)) {
+      throw new IllegalArgumentException("Load factor must be positive and finite");
+    }
+
     final int capacity = initialCapacity >= BucketSyncMap.MAXIMUM_CAPACITY
       ? BucketSyncMap.MAXIMUM_CAPACITY
       : BucketSyncMap.tableSizeFor(initialCapacity);
@@ -532,9 +539,8 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
   }
 
   @Override
-  public V getOrDefault(final Object key, final V defaultValue) {
+  public @Nullable V getOrDefault(final Object key, final @Nullable V defaultValue) {
     requireNonNull(key, "key");
-    requireNonNull(defaultValue, "defaultValue");
 
     Node<K, V>@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
@@ -733,7 +739,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     long count = 0L;
 
     Node<K, V>[] immutable;
-    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -776,10 +782,12 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
         }
       }
 
-      if(!this.amended || (mutable = this.mutableTable) == null) return null;
-
       final int index;
-      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if(!this.amended || (mutable == null && (mutable = this.mutableTable) == null) || (node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        return null;
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
+        mutable = this.forward((ForwardingNode<K, V>) node);
+      } else {
         synchronized(node) {
           if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
@@ -1219,7 +1227,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     Object previous;
 
     Node<K, V>[] immutable;
-    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -1257,10 +1265,12 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
         }
       }
 
-      if(!this.amended || (mutable = this.mutableTable) == null) return null;
-
       final int index;
-      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if(!this.amended || (mutable == null && (mutable = this.mutableTable) == null) || (node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        return null;
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
+        mutable = this.forward((ForwardingNode<K, V>) node);
+      } else {
         synchronized(node) {
           if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
@@ -1308,7 +1318,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     requireNonNull(value, "value");
 
     Node<K, V>[] immutable;
-    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -1347,10 +1357,12 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
         }
       }
 
-      if(!this.amended || (mutable = this.mutableTable) == null) return false;
-
       final int index;
-      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if(!this.amended || (mutable == null && (mutable = this.mutableTable) == null) || (node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        return false;
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
+        mutable = this.forward((ForwardingNode<K, V>) node);
+      } else {
         synchronized(node) {
           if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(Node<K, V> previousNode = null; ; ) {
@@ -1402,7 +1414,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     Object previous;
 
     Node<K, V>[] immutable;
-    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -1440,10 +1452,12 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
         }
       }
 
-      if(!this.amended || (mutable = this.mutableTable) == null) return null;
-
       final int index;
-      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if(!this.amended || (mutable == null && (mutable = this.mutableTable) == null) || (node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        return null;
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
+        mutable = this.forward((ForwardingNode<K, V>) node);
+      } else {
         synchronized(node) {
           if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
@@ -1485,7 +1499,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     Object previous;
 
     Node<K, V>[] immutable;
-    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable;
+    Node<K, V>@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node<K, V> node;
 
@@ -1524,10 +1538,12 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
         }
       }
 
-      if(!this.amended || (mutable = this.mutableTable) == null) return false;
-
       final int index;
-      if((node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) != null) {
+      if(!this.amended || (mutable == null && (mutable = this.mutableTable) == null) || (node = BucketSyncMap.getNode(mutable, index = (mutable.length - 1) & hash)) == null) {
+        return false;
+      } else if(node.hash == BucketSyncMap.NODE_MOVED) {
+        mutable = this.forward((ForwardingNode<K, V>) node);
+      } else {
         synchronized(node) {
           if(BucketSyncMap.getNodePlain(mutable, index) == node) {
             for(; ; ) {
@@ -1599,7 +1615,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
         final ObjectReference reference = node.referencePlain();
         Object current = reference.get();
         for(; ; ) {
-          if(current == null || current == BucketSyncMap.EXPUNGED) continue;
+          if(current == null || current == BucketSyncMap.EXPUNGED) break;
 
           final Object witness = reference.compareAndExchange(current, null);
           if(witness != current) {
@@ -1749,6 +1765,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
       if(!this.amended
         || (source = this.mutableTable) == null
         || (length = source.length) <= 0
+        || length >= BucketSyncMap.MAXIMUM_CAPACITY
         || this.size.sum() < ((long) length * this.loadFactor)) return;
 
       operation = StampLock.operation(state);
@@ -2319,7 +2336,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
     }
 
     @SuppressWarnings("unchecked")
-    private <V> V valueOr(final V defaultValue) {
+    private <V> @Nullable V valueOr(final @Nullable V defaultValue) {
       final Object value;
       return ((value = ObjectReference.VALUE.getAcquire(this)) != null && value != BucketSyncMap.EXPUNGED) ? (V) value : defaultValue;
     }
@@ -2493,7 +2510,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
 
     @Override
     public int hashCode() {
-      return Objects.hash(this.key, this.value);
+      return Objects.hashCode(this.key) ^ Objects.hashCode(this.value);
     }
 
     @Override
@@ -2506,7 +2523,7 @@ public class BucketSyncMap<K, V> extends AbstractMap<K, V> implements Concurrent
 
     @Override
     public String toString() {
-      return "SyncMap.Entry{key=" + this.key + ", value=" + this.value + "}";
+      return "BucketSyncMap.Entry{key=" + this.key + ", value=" + this.value + "}";
     }
   }
 

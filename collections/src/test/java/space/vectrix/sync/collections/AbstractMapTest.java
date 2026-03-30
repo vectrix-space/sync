@@ -163,7 +163,6 @@ public abstract class AbstractMapTest<K, V> {
   @Test
   public void test_getOrDefault_nullKey() {
     final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.getOrDefault(this.key(3), null), "Map should throw exception when given a null default value.");
     assertThrows(NullPointerException.class, () -> map.getOrDefault(null, this.value(3)), "Map should throw exception when given a null key.");
   }
 
