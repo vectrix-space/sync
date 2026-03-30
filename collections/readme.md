@@ -20,6 +20,11 @@ Provides concurrent thread-safe collections for highly concurrent scenarios in J
   * Fully compatible with the Java Collections Framework (`ConcurrentMap`).
   * Delivers up to **2× higher update throughput** than `ConcurrentHashMap` under heavy contention, while matching its performance for reads and other operations.
 
+* **ForwardedSyncMap**: A performant implementation of `ConcurrentMap`.
+
+  * Fully compatible with the Java Collections Framework (`ConcurrentMap`).
+  * Delivers up to **2× higher update throughput** than `ConcurrentHashMap` under heavy contention, while being a bit slower in reads and other operations.
+
 ## Dependency
 
 Sync is available at the Maven Central Repository.

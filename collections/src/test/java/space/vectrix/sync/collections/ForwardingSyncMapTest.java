@@ -23,17 +23,18 @@
  */
 package space.vectrix.sync.collections;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Provides {@link BucketSyncMap} specific test data for {@link AbstractMapTest}.
+ * Provides {@link ForwardingSyncMap} specific test data for {@link AbstractMapTest}.
  *
  * @since 1.0.0
  */
-public class BucketSyncMapTest extends AbstractNullMapTest<String, String> {
+public class ForwardingSyncMapTest extends AbstractMapTest<String, String> {
   @Override
   protected Map<String, String> createMap() {
-    return new BucketSyncMap<>();
+    return new ForwardingSyncMap<>(HashMap::new);
   }
 
   @Override

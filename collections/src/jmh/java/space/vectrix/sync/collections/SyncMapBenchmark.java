@@ -49,10 +49,10 @@ import org.openjdk.jmh.infra.Blackhole;
 @Measurement(iterations = 5)
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-public class BucketSyncMapBenchmark {
+public class SyncMapBenchmark {
   @State(Scope.Benchmark)
   public static class Container {
-    @Param({ "BucketSyncMap", "ConcurrentHashMap", "SynchronizedMap" })
+    @Param({ "BucketSyncMap", "ForwardingSyncMap", "ConcurrentHashMap", "SynchronizedMap" })
     private String implementation;
 
     @Param({ "none", "presize", "prepopulate" })
@@ -73,6 +73,7 @@ public class BucketSyncMapBenchmark {
 
       switch(this.implementation) {
         case "BucketSyncMap" -> this.map = presized ? new BucketSyncMap<>(BucketSyncMap.FASTEST_SPREAD, this.size) : new BucketSyncMap<>(BucketSyncMap.FASTEST_SPREAD);
+        case "ForwardingSyncMap" -> this.map = presized ? new ForwardingSyncMap<>(HashMap::new, this.size) : new ForwardingSyncMap<>(HashMap::new);
         case "ConcurrentHashMap" -> this.map = presized ? new ConcurrentHashMap<>(this.size) : new ConcurrentHashMap<>();
         case "SynchronizedMap" -> this.map = presized
           ? Collections.synchronizedMap(new HashMap<>(this.size))

@@ -32,7 +32,6 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -139,12 +138,6 @@ public abstract class AbstractMapTest<K, V> {
     assertNull(map.get(this.key(10)), "Map should return the value null for key 10.");
   }
 
-  @Test
-  public void test_get_nullKey() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.get(null), "Map should throw exception when given a null key.");
-  }
-
   // getOrDefault
 
   @Test
@@ -158,13 +151,6 @@ public abstract class AbstractMapTest<K, V> {
     final Map<K, V> map = this.populate(this.createMap(), 5);
     assertEquals(this.value(3), map.getOrDefault(this.key(3), this.value(5)), "Map should return the value 3 for key 3.");
     assertEquals(this.value(4), map.getOrDefault(this.key(4), this.value(5)), "Map should return the value 3 for key 3.");
-  }
-
-  @Test
-  public void test_getOrDefault_nullKey() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.getOrDefault(this.key(3), null), "Map should throw exception when given a null default value.");
-    assertThrows(NullPointerException.class, () -> map.getOrDefault(null, this.value(3)), "Map should throw exception when given a null key.");
   }
 
   // computeIfAbsent
@@ -183,12 +169,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(this.value(3), map.computeIfAbsent(this.key(3), key -> this.value(5)), "Map should return the value 3 for key 3.");
     assertEquals(this.value(3), map.get(this.key(3)), "Map should return the value 3 for key 3.");
     assertEquals(5, map.size(), "Map should be of size 5.");
-  }
-
-  @Test
-  public void test_computeIfAbsent_nullKey() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.computeIfAbsent(null, key -> this.value(0)), "Map should throw exception when given a null key.");
   }
 
   @Test
@@ -226,12 +206,6 @@ public abstract class AbstractMapTest<K, V> {
   }
 
   @Test
-  public void test_computeIfPresent_nullKey() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.computeIfPresent(null, (key, previousValue) -> this.value(0)), "Map should throw exception when given a null key.");
-  }
-
-  @Test
   public void test_computeIfPresent_fullNullValue() {
     final Map<K, V> map = this.populate(this.createMap(), 5);
     assertNull(map.computeIfPresent(this.key(3), (key, previousValue) -> null), "Map should return null for key 3.");
@@ -263,12 +237,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(this.value(5), map.compute(this.key(3), (key, previousValue) -> this.value(5)), "Map should return the value 5 for key 3.");
     assertEquals(this.value(5), map.get(this.key(3)), "Map should return the value 5 for key 3.");
     assertEquals(5, map.size(), "Map should be of size 5.");
-  }
-
-  @Test
-  public void test_compute_nullKey() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.compute(null, (key, previousValue) -> this.value(0)), "Map should throw exception when given a null key.");
   }
 
   @Test
@@ -305,13 +273,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(5, map.size(), "Map should be of size 5.");
   }
 
-  @Test
-  public void test_putIfAbsent_nullKeyValue() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.putIfAbsent(null, this.value(3)), "Map should throw exception when given a null key.");
-    assertThrows(NullPointerException.class, () -> map.putIfAbsent(this.key(3), null), "Map should throw exception when given a null value.");
-  }
-
   // put
 
   @Test
@@ -330,13 +291,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(5, map.size(), "Map should be of size 5.");
   }
 
-  @Test
-  public void test_put_nullKeyValue() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.put(null, this.value(3)), "Map should throw exception when given a null key.");
-    assertThrows(NullPointerException.class, () -> map.put(this.key(3), null), "Map should throw exception when given a null value.");
-  }
-
   // removeKey
 
   @Test
@@ -353,12 +307,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(this.value(3), map.remove(this.key(3)), "Map should return value 3 for key 3.");
     assertNull(map.get(this.key(3)), "Map should return null for key 3.");
     assertEquals(4, map.size(), "Map should be of size 4.");
-  }
-
-  @Test
-  public void test_removeKey_nullKey() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.remove(null), "Map should throw exception when given a null key.");
   }
 
   // removeKeyValue
@@ -383,13 +331,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(4, map.size(), "Map should be of size 4.");
   }
 
-  @Test
-  public void test_removeKeyValue_nullKeyValue() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.remove(null, this.value(3)), "Map should throw exception when given a null key.");
-    assertThrows(NullPointerException.class, () -> map.remove(this.key(3), null), "Map should throw exception when given a null value.");
-  }
-
   // replaceKey
 
   @Test
@@ -406,13 +347,6 @@ public abstract class AbstractMapTest<K, V> {
     assertEquals(this.value(3), map.replace(this.key(3), this.value(5)), "Map should return value 3 for key 3 and value 5.");
     assertEquals(this.value(5), map.get(this.key(3)), "Map should return value 5 for key 3.");
     assertEquals(5, map.size(), "Map should be of size 5.");
-  }
-
-  @Test
-  public void test_replaceKey_nullKeyValue() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.remove(null, this.value(3)), "Map should throw exception when given a null key.");
-    assertThrows(NullPointerException.class, () -> map.remove(this.key(3), null), "Map should throw exception when given a null value.");
   }
 
   // replaceKeyValue
@@ -435,13 +369,6 @@ public abstract class AbstractMapTest<K, V> {
     assertTrue(map.replace(this.key(3), this.value(3), this.value(5)), "Map should return true for key 3, value 3 and value 5.");
     assertEquals(this.value(5), map.get(this.key(3)), "Map should return value 5 for key 3.");
     assertEquals(5, map.size(), "Map should be of size 5.");
-  }
-
-  @Test
-  public void test_replaceKeyValue_nullKeyValue() {
-    final Map<K, V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.replace(null, this.value(3), this.value(5)), "Map should throw exception when given a null key.");
-    assertThrows(NullPointerException.class, () -> map.replace(this.key(3), null, null), "Map should throw exception when given a null value.");
   }
 
   // forEach
