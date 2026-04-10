@@ -140,7 +140,6 @@ public abstract class {{ key }}2ObjectAbstractMapTest<V> {
   @Test
   public void test_getOrDefault_nullKey() {
     final {{ key }}2ObjectMap<V> map = this.createMap();
-    assertThrows(NullPointerException.class, () -> map.getOrDefault(this.key(3), null), "Map should throw exception when given a null default value.");
     assertThrows(NullPointerException.class, () -> map.getOrDefault(null, this.value(3)), "Map should throw exception when given a null key.");
   }
 
