@@ -20,7 +20,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.BiFunction;
 import java.util.function.{{ keyJava }}Function;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.UnknownNullability;
 import org.jspecify.annotations.Nullable;
 
 import static java.util.Objects.requireNonNull;
@@ -398,7 +398,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
 
   @Override
   public boolean containsKey(final {{ keyPrimitive }} key) {
-    Node[] table = this.immutableTable;
+    Node@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
     Node node;
 
@@ -458,7 +458,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
 
   @Override
   public @Nullable V get(final {{ keyPrimitive }} key) {
-    Node[] table = this.immutableTable;
+    Node@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
     Node node;
 
@@ -520,7 +520,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   public V getOrDefault(final {{ keyPrimitive }} key, final V defaultValue) {
     requireNonNull(defaultValue, "defaultValue");
 
-    Node[] table = this.immutableTable;
+    Node@UnknownNullability [] table = this.immutableTable;
     int length = table.length;
     Node node;
 
@@ -588,7 +588,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
 
     V next;
 
-    Node[] immutable, mutable = null;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node node;
 
@@ -710,7 +711,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
 
     V next;
 
-    Node[] immutable, mutable = null;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node node;
 
@@ -830,7 +832,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   public @Nullable V computeIfPresent(final {{ keyObject }} key, final BiFunction<? super {{ keyObject }}, ? super V, ? extends @Nullable V> remappingFunction) {
     requireNonNull(key, "key");
 
-    return super.computeIfPresent(key, remappingFunction);
+    return this.computeIfPresent(key.{{ keyPrimitive }}Value(), remappingFunction);
   }
 
   /**
@@ -852,7 +854,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     V next;
     long count = 0L;
 
-    Node[] immutable, mutable;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node node;
 
@@ -963,7 +966,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
     V next;
     long count = 0L;
 
-    Node[] immutable, mutable = null;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node node;
 
@@ -1092,7 +1096,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   public @Nullable V putIfAbsent(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable = null;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node node;
 
@@ -1189,7 +1194,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   public @Nullable V put(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable = null;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable = null;
     int length;
     Node node;
 
@@ -1284,7 +1290,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   }
 
   private void amendNode(final int hash, final {{ keyPrimitive }} key, final ObjectReference reference) {
-    Node[] table = this.mutableTable;
+    Node@org.jetbrains.annotations.Nullable [] table = this.mutableTable;
 
     for(Node node; ; ) {
       final int length, index;
@@ -1332,7 +1338,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   public @Nullable V remove(final {{ keyPrimitive }} key) {
     Object previous;
 
-    Node[] immutable, mutable;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node node;
 
@@ -1425,7 +1432,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   public boolean remove(final {{ keyPrimitive }} key, final Object value) {
     requireNonNull(value, "value");
 
-    Node[] immutable, mutable;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node node;
 
@@ -1510,7 +1518,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   }
 
   @Override
-  public @Nullable V replace(final {{ keyObject }} key, final @NonNull V value) {
+  public @Nullable V replace(final {{ keyObject }} key, final V value) {
     requireNonNull(key, "key");
 
     return super.replace(key, value);
@@ -1518,12 +1526,13 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
 
   @Override
   @SuppressWarnings("unchecked")
-  public @Nullable V replace(final {{ keyPrimitive }} key, final @NonNull V value) {
+  public @Nullable V replace(final {{ keyPrimitive }} key, final V value) {
     requireNonNull(value, "value");
 
     Object previous;
 
-    Node[] immutable, mutable;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node node;
 
@@ -1597,20 +1606,21 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   }
 
   @Override
-  public boolean replace(final {{ keyObject }} key, final @NonNull V oldValue, final @NonNull V newValue) {
+  public boolean replace(final {{ keyObject }} key, final V oldValue, final V newValue) {
     requireNonNull(key, "key");
 
     return super.replace(key, oldValue, newValue);
   }
 
   @Override
-  public boolean replace(final {{ keyPrimitive }} key, final @NonNull V oldValue, final @NonNull V newValue) {
+  public boolean replace(final {{ keyPrimitive }} key, final V oldValue, final V newValue) {
     requireNonNull(oldValue, "oldValue");
     requireNonNull(newValue, "newValue");
 
     Object previous;
 
-    Node[] immutable, mutable;
+    Node[] immutable;
+    Node@org.jetbrains.annotations.Nullable [] mutable;
     int length;
     Node node;
 
@@ -1814,7 +1824,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   private Node@Nullable [] initialize() {
     long state;
 
-    Node[] source, destination;
+    Node[] source;
+    Node@org.jetbrains.annotations.Nullable [] destination;
 
     int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_INITIALIZE, StampLock.PHASE_RUNNING, 1, 0);
@@ -1861,7 +1872,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   private void resize() {
     long state;
 
-    Node[] source, destination;
+    Node@org.jetbrains.annotations.Nullable [] source;
+    Node@org.jetbrains.annotations.Nullable [] destination;
     int length;
 
     int operation, version, nextVersion, count, phase;
@@ -1980,7 +1992,8 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   private void amend() {
     long state;
 
-    Node[] source, destination;
+    Node[] source;
+    Node@org.jetbrains.annotations.Nullable [] destination;
     int length;
 
     int operation, version, nextVersion, count, phase;
@@ -2099,7 +2112,7 @@ public class {{ key }}2ObjectBucketSyncMap<V> extends Abstract{{ key }}2ObjectMa
   protected void promote(final boolean wait) {
     long state;
 
-    Node[] source;
+    Node@org.jetbrains.annotations.Nullable [] source;
 
     int operation, version, nextVersion;
     long next = StampLock.with(StampLock.OPERATION_PROMOTE, StampLock.PHASE_RUNNING, 1, 0);
