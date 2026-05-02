@@ -26,7 +26,7 @@ junit-legacy = { module = "junit:junit", version = "4.13.2" }
 
 stylecheck = "ca.stellardrift:stylecheck:0.2.1"
 
-guava-testlib =  { module = "com.google.guava:guava-testlib", version = "33.5.0-jre" }
+guava-testlib =  { module = "com.google.guava:guava-testlib", version = "33.6.0-jre" }
 
 build-indra = { module = "net.kyori:indra-common", version.ref = "indra" }
 build-indra-sonatype = { module = "net.kyori:indra-publishing-sonatype", version.ref = "indra" }
