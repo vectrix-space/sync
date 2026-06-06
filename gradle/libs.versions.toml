@@ -7,7 +7,7 @@ fastutil = "8.5.18"
 indra = "4.0.0"
 jmh = "1.37"
 jmhPlugin = "0.7.3"
-junit = "6.0.3"
+junit = "6.1.0"
 
 [libraries]
 jetbrainsAnnotations = "org.jetbrains:annotations:26.1.0"
